@@ -199,16 +199,21 @@ function getDailyKey() {
 app.get('/api/leaderboard/daily', async (req, res) => {
     // Try to connect to Redis if not connected
     if (!isRedisAvailable()) {
+        console.log('Daily leaderboard: Redis not available, attempting connection...');
         await ensureRedisConnection();
     }
     
     if (!isRedisAvailable()) {
+        console.log('Daily leaderboard: Redis still unavailable, returning empty');
         return res.json({ success: true, leaderboard: [] });
     }
     try {
         const key = getDailyKey();
+        console.log(`Daily leaderboard: Fetching from key ${key}`);
+        
         // ZREVRANGE returns highest scores first - now 40 entries
         const scores = await redisClient.zRangeWithScores(key, 0, 39, { REV: true });
+        console.log(`Daily leaderboard: Found ${scores.length} entries`);
 
         const leaderboard = scores.map((entry, index) => {
             const [username, discord] = entry.value.split('::');
@@ -229,19 +234,20 @@ app.get('/api/leaderboard/daily', async (req, res) => {
 
 /**
  * GET /api/leaderboard/all-time
- * Returns top 40 scores from PostgreSQL (all-time)
+ * Returns top 40 best scores from PostgreSQL (best per username)
  */
 app.get('/api/leaderboard/all-time', async (req, res) => {
     try {
-        // Simple query - just get top 40 scores ordered by score (no flagged filter for now)
+        // Get best score per username, ordered by score descending
         const result = await pgPool.query(`
-            SELECT username, discord, score, created_at
+            SELECT username, discord, MAX(score) as score, MAX(created_at) as created_at
             FROM scores
+            GROUP BY username, discord
             ORDER BY score DESC
             LIMIT 40
         `);
 
-        console.log(`All-time leaderboard: Found ${result.rows.length} scores`);
+        console.log(`All-time leaderboard: Found ${result.rows.length} unique players`);
 
         const leaderboard = result.rows.map((row, index) => ({
             rank: index + 1,
@@ -310,21 +316,32 @@ app.post('/api/score', async (req, res) => {
 
         // Add to Redis daily leaderboard (try to connect if not connected)
         if (!isRedisAvailable()) {
+            console.log('Score submit: Redis not available, attempting connection...');
             await ensureRedisConnection();
         }
         
         if (isRedisAvailable()) {
             try {
                 const dailyKey = getDailyKey();
+                console.log(`Score submit: Adding to Redis key ${dailyKey}, memberKey: ${memberKey}, score: ${score}`);
+                
                 const existingScore = await redisClient.zScore(dailyKey, memberKey);
+                console.log(`Score submit: Existing score for ${memberKey}: ${existingScore}`);
+                
                 if (existingScore === null || score > existingScore) {
                     await redisClient.zAdd(dailyKey, { score: score, value: memberKey });
+                    console.log(`Score submit: Added/updated score in Redis`);
+                } else {
+                    console.log(`Score submit: Score ${score} not better than existing ${existingScore}, skipping`);
                 }
                 await redisClient.expire(dailyKey, 86400); // 24 hours
                 dailyRank = await redisClient.zRevRank(dailyKey, memberKey);
+                console.log(`Score submit: Daily rank is ${dailyRank}`);
             } catch (rkErr) {
                 console.error("Redis score submit error:", rkErr.message);
             }
+        } else {
+            console.log('Score submit: Redis unavailable, skipping daily leaderboard');
         }
 
         // PostgreSQL: Always insert the score, leaderboard will show best per player
