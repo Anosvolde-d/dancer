@@ -194,47 +194,43 @@ function getDailyKey() {
 
 /**
  * GET /api/leaderboard/daily
- * Returns top 40 scores from Redis for the current day (best per player)
+ * Returns top 40 scores from today (resets at 00:00 UTC)
+ * Shows ALL scores, not grouped by player
  */
 app.get('/api/leaderboard/daily', async (req, res) => {
-    // Try to connect to Redis if not connected
-    if (!isRedisAvailable()) {
-        console.log('Daily leaderboard: Redis not available, attempting connection...');
-        await ensureRedisConnection();
-    }
-    
-    if (!isRedisAvailable()) {
-        console.log('Daily leaderboard: Redis still unavailable, returning empty');
-        return res.json({ success: true, leaderboard: [] });
-    }
     try {
-        const key = getDailyKey();
-        console.log(`Daily leaderboard: Fetching from key ${key}`);
+        // Get today's date in UTC
+        const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
         
-        // ZREVRANGE returns highest scores first - now 40 entries
-        const scores = await redisClient.zRangeWithScores(key, 0, 39, { REV: true });
-        console.log(`Daily leaderboard: Found ${scores.length} entries`);
+        // Get top 40 scores from today, ordered by score descending
+        const result = await pgPool.query(`
+            SELECT username, discord, score, created_at
+            FROM scores
+            WHERE DATE(created_at AT TIME ZONE 'UTC') = $1
+            ORDER BY score DESC
+            LIMIT 40
+        `, [today]);
 
-        const leaderboard = scores.map((entry, index) => {
-            const [username, discord] = entry.value.split('::');
-            return {
-                rank: index + 1,
-                username: username || 'Anonymous',
-                discord: discord || '',
-                score: entry.score
-            };
-        });
+        console.log(`Daily leaderboard: Found ${result.rows.length} scores for ${today}`);
+
+        const leaderboard = result.rows.map((row, index) => ({
+            rank: index + 1,
+            username: row.username,
+            discord: row.discord || '',
+            score: row.score,
+            date: row.created_at
+        }));
 
         res.json({ success: true, leaderboard });
     } catch (err) {
         console.error('Error fetching daily leaderboard:', err.message);
-        res.status(500).json({ success: false, error: 'Failed to fetch daily leaderboard' });
+        res.json({ success: true, leaderboard: [] });
     }
 });
 
 /**
  * GET /api/leaderboard/all-time
- * Returns top 40 best scores from PostgreSQL (best per username)
+ * Returns top 40 best scores (best per username, never resets)
  */
 app.get('/api/leaderboard/all-time', async (req, res) => {
     try {
