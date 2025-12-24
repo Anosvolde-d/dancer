@@ -194,24 +194,24 @@ function getDailyKey() {
 
 /**
  * GET /api/leaderboard/daily
- * Returns top 40 scores from today (resets at 00:00 UTC)
- * Shows ALL scores, not grouped by player
+ * Returns top 40 best scores from today (best per username, resets at 00:00 UTC)
  */
 app.get('/api/leaderboard/daily', async (req, res) => {
     try {
         // Get today's date in UTC
         const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
         
-        // Get top 40 scores from today, ordered by score descending
+        // Get best score per username from today, ordered by score descending
         const result = await pgPool.query(`
-            SELECT username, discord, score, created_at
+            SELECT username, discord, MAX(score) as score, MAX(created_at) as created_at
             FROM scores
             WHERE DATE(created_at AT TIME ZONE 'UTC') = $1
+            GROUP BY username, discord
             ORDER BY score DESC
             LIMIT 40
         `, [today]);
 
-        console.log(`Daily leaderboard: Found ${result.rows.length} scores for ${today}`);
+        console.log(`Daily leaderboard: Found ${result.rows.length} unique players for ${today}`);
 
         const leaderboard = result.rows.map((row, index) => ({
             rank: index + 1,
