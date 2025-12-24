@@ -474,6 +474,9 @@ class Game {
         this.camera = {
             shake: 0
         };
+        
+        // Mobile scale for 2D gameplay (de-zoom on mobile)
+        this.mobileScale = 1.0;
 
         // Audio Analysis
         this.audioContext = null;
@@ -530,6 +533,14 @@ class Game {
 
         this.floorY = window.innerHeight - 100;
         this.centerX = window.innerWidth / 2;
+        
+        // Set mobile scale for 2D gameplay (de-zoom on mobile)
+        if (this.isMobileDevice()) {
+            // Scale down to show more play area on mobile
+            this.mobileScale = 0.8;
+        } else {
+            this.mobileScale = 1.0;
+        }
     }
 
     bindEvents() {
@@ -612,62 +623,170 @@ class Game {
 
     /**
      * Sets up mobile touch controls for 2D gameplay.
+     * Uses dual event system (touch + pointer) for iPhone compatibility.
      */
     setupMobileControls() {
         if (!this.isMobileDevice()) return;
         
         const mobileControls = document.getElementById('mobile-controls');
         const jumpBtn = document.getElementById('mobile-jump-btn');
-        const leftBtn = document.getElementById('mobile-left-btn');
-        const rightBtn = document.getElementById('mobile-right-btn');
         
-        if (!mobileControls || !jumpBtn || !leftBtn || !rightBtn) return;
+        if (!mobileControls || !jumpBtn) return;
         
-        // Jump button
-        jumpBtn.addEventListener('touchstart', (e) => {
-            e.preventDefault();
-            this.keys.jump = true;
-            if (this.gameState === 'PLAYING' || this.gameState === 'BOSS_PHASE') {
-                this.player.jump();
+        // Setup jump button with dual event system
+        this.setupTouchButton(jumpBtn, 
+            () => {
+                this.keys.jump = true;
+                if (this.gameState === 'PLAYING' || this.gameState === 'BOSS_PHASE') {
+                    this.player.jump();
+                }
+            },
+            () => {
+                this.keys.jump = false;
             }
-        }, { passive: false });
+        );
         
-        jumpBtn.addEventListener('touchend', (e) => {
-            e.preventDefault();
-            this.keys.jump = false;
-        }, { passive: false });
+        // Setup 2D joystick for horizontal movement
+        this.setup2DJoystick();
         
-        // Left button
-        leftBtn.addEventListener('touchstart', (e) => {
-            e.preventDefault();
-            this.keys.left = true;
-        }, { passive: false });
+        console.log('Mobile controls initialized with dual event system');
+    }
+
+    /**
+     * Sets up a touch button with dual event system for iPhone compatibility.
+     * @param {HTMLElement} element - The button element
+     * @param {Function} onPress - Callback when pressed
+     * @param {Function} onRelease - Callback when released
+     */
+    setupTouchButton(element, onPress, onRelease) {
+        if (!element) return;
         
-        leftBtn.addEventListener('touchend', (e) => {
+        // Prevent default touch behaviors via CSS
+        element.style.touchAction = 'none';
+        
+        let isPressed = false;
+        
+        const handlePress = (e) => {
             e.preventDefault();
+            e.stopPropagation();
+            if (!isPressed) {
+                isPressed = true;
+                onPress();
+            }
+        };
+        
+        const handleRelease = (e) => {
+            if (e) {
+                e.preventDefault();
+                e.stopPropagation();
+            }
+            if (isPressed) {
+                isPressed = false;
+                onRelease();
+            }
+        };
+        
+        // Touch events
+        element.addEventListener('touchstart', handlePress, { passive: false });
+        element.addEventListener('touchend', handleRelease, { passive: false });
+        element.addEventListener('touchcancel', handleRelease, { passive: false });
+        
+        // Pointer events (better iOS Safari support)
+        element.addEventListener('pointerdown', handlePress, { passive: false });
+        element.addEventListener('pointerup', handleRelease, { passive: false });
+        element.addEventListener('pointercancel', handleRelease, { passive: false });
+        element.addEventListener('pointerleave', handleRelease, { passive: false });
+    }
+
+    /**
+     * Sets up the 2D joystick for horizontal movement.
+     */
+    setup2DJoystick() {
+        const joystickBase = document.getElementById('joystick-base-2d');
+        const joystickStick = document.getElementById('joystick-stick-2d');
+        
+        if (!joystickBase || !joystickStick) {
+            console.warn('2D Joystick elements not found');
+            return;
+        }
+        
+        let joystickActive = false;
+        let joystickCenter = { x: 0 };
+        const maxDistance = 25; // Horizontal max distance
+        const deadZone = 0.2;
+        
+        const handleStart = (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            joystickActive = true;
+            const rect = joystickBase.getBoundingClientRect();
+            joystickCenter.x = rect.left + rect.width / 2;
+        };
+        
+        const handleMove = (e) => {
+            if (!joystickActive) return;
+            e.preventDefault();
+            e.stopPropagation();
+            
+            // Get client X from touch or pointer event
+            let clientX;
+            if (e.touches && e.touches.length > 0) {
+                clientX = e.touches[0].clientX;
+            } else if (e.clientX !== undefined) {
+                clientX = e.clientX;
+            } else {
+                return;
+            }
+            
+            let dx = clientX - joystickCenter.x;
+            
+            // Limit to max distance (horizontal only)
+            dx = Math.max(-maxDistance, Math.min(maxDistance, dx));
+            
+            // Move stick visually (horizontal only)
+            joystickStick.style.transform = `translateX(${dx}px)`;
+            
+            // Convert to movement input (normalized -1 to 1)
+            const normalizedX = dx / maxDistance;
+            
+            // Apply dead zone and set movement keys
+            if (normalizedX < -deadZone) {
+                this.keys.left = true;
+                this.keys.right = false;
+            } else if (normalizedX > deadZone) {
+                this.keys.right = true;
+                this.keys.left = false;
+            } else {
+                this.keys.left = false;
+                this.keys.right = false;
+            }
+        };
+        
+        const handleEnd = (e) => {
+            if (e) {
+                e.preventDefault();
+                e.stopPropagation();
+            }
+            joystickActive = false;
+            joystickStick.style.transform = 'translateX(0)';
             this.keys.left = false;
-        }, { passive: false });
-        
-        leftBtn.addEventListener('touchcancel', () => {
-            this.keys.left = false;
-        });
-        
-        // Right button
-        rightBtn.addEventListener('touchstart', (e) => {
-            e.preventDefault();
-            this.keys.right = true;
-        }, { passive: false });
-        
-        rightBtn.addEventListener('touchend', (e) => {
-            e.preventDefault();
             this.keys.right = false;
-        }, { passive: false });
+        };
         
-        rightBtn.addEventListener('touchcancel', () => {
-            this.keys.right = false;
-        });
+        // Touch events
+        joystickBase.addEventListener('touchstart', handleStart, { passive: false });
+        joystickBase.addEventListener('touchmove', handleMove, { passive: false });
+        joystickBase.addEventListener('touchend', handleEnd, { passive: false });
+        joystickBase.addEventListener('touchcancel', handleEnd, { passive: false });
         
-        console.log('Mobile controls initialized');
+        // Pointer events (better iOS Safari support)
+        joystickBase.addEventListener('pointerdown', handleStart, { passive: false });
+        joystickBase.addEventListener('pointermove', handleMove, { passive: false });
+        joystickBase.addEventListener('pointerup', handleEnd, { passive: false });
+        joystickBase.addEventListener('pointercancel', handleEnd, { passive: false });
+        joystickBase.addEventListener('pointerleave', handleEnd, { passive: false });
+        
+        console.log('2D Joystick initialized');
     }
 
     /**
@@ -1669,6 +1788,15 @@ class Game {
         const shakeX = (Math.random() - 0.5) * this.camera.shake;
         const shakeY = (Math.random() - 0.5) * this.camera.shake;
         this.ctx.translate(shakeX, shakeY);
+        
+        // Apply mobile scale (de-zoom on mobile devices)
+        if (this.mobileScale !== 1.0) {
+            const centerX = window.innerWidth / 2;
+            const centerY = window.innerHeight / 2;
+            this.ctx.translate(centerX, centerY);
+            this.ctx.scale(this.mobileScale, this.mobileScale);
+            this.ctx.translate(-centerX, -centerY);
+        }
 
         if (this.gameState === 'PLAYING') {
             // Draw Floor
