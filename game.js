@@ -964,7 +964,10 @@ class Game {
             clearTimeout(timeoutId);
             
             const text = await response.text();
+            console.log('All-time leaderboard raw response:', text.substring(0, 200));
+            
             const result = safeParseLeaderboard(text);
+            console.log('All-time leaderboard parsed:', result.success, 'entries:', result.leaderboard?.length);
             
             if (result.success) {
                 this.renderLeaderboard('alltime-leaderboard', result.leaderboard);
