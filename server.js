@@ -22,31 +22,66 @@ app.use(cors());
 app.use(express.json());
 app.use(express.static(path.join(__dirname)));
 
-// Redis Client Configuration
+// Redis Client Configuration - lazy connection, reconnects on demand
 const redisUrl = process.env.REDIS_URL || 'redis://localhost:6379';
-const redisClient = createClient({
-    url: redisUrl,
-    socket: {
-        tls: false,
-        connectTimeout: 5000,
-        reconnectStrategy: (retries) => {
-            if (retries > 5) {
-                console.log('Max Redis reconnection attempts reached (Switching to Offline Mode)');
-                return new Error('Max retries reached');
-            }
-            return Math.min(retries * 200, 2000);
-        }
-    }
-});
+let redisClient = null;
+let redisConnecting = false;
 
-redisClient.on('error', (err) => {
-    // Only log non-routine errors (suppress frequent ECONNRESET spam)
-    if (err.code !== 'ECONNRESET') {
-        console.error('Redis Client Error:', err.message);
+// Create Redis client with relaxed settings
+function createRedisClient() {
+    return createClient({
+        url: redisUrl,
+        socket: {
+            tls: false,
+            connectTimeout: 10000,
+            reconnectStrategy: false // Don't auto-reconnect, we'll handle it manually
+        }
+    });
+}
+
+// Try to connect/reconnect to Redis
+async function ensureRedisConnection() {
+    if (redisClient && redisClient.isOpen) {
+        return true;
     }
-});
-redisClient.on('connect', () => console.log('✓ Connected to Redis'));
-redisClient.on('reconnecting', () => console.log('⟳ Redis reconnecting...'));
+    
+    if (redisConnecting) {
+        return false; // Already trying to connect
+    }
+    
+    redisConnecting = true;
+    
+    try {
+        // Close old client if exists
+        if (redisClient) {
+            try {
+                await redisClient.quit();
+            } catch (e) { /* ignore */ }
+        }
+        
+        redisClient = createRedisClient();
+        
+        redisClient.on('error', (err) => {
+            if (err.code !== 'ECONNRESET' && err.code !== 'ECONNREFUSED') {
+                console.error('Redis Error:', err.message);
+            }
+        });
+        
+        await redisClient.connect();
+        console.log('✓ Connected to Redis');
+        redisConnecting = false;
+        return true;
+    } catch (err) {
+        console.log('⚠ Redis unavailable:', err.message);
+        redisConnecting = false;
+        return false;
+    }
+}
+
+// Check if Redis is available (non-blocking)
+function isRedisAvailable() {
+    return redisClient && redisClient.isOpen;
+}
 
 // PostgreSQL Pool Configuration
 const pgPool = new Pool({
@@ -162,7 +197,12 @@ function getDailyKey() {
  * Returns top 40 scores from Redis for the current day (best per player)
  */
 app.get('/api/leaderboard/daily', async (req, res) => {
-    if (!redisClient.isOpen) {
+    // Try to connect to Redis if not connected
+    if (!isRedisAvailable()) {
+        await ensureRedisConnection();
+    }
+    
+    if (!isRedisAvailable()) {
         return res.json({ success: true, leaderboard: [] });
     }
     try {
@@ -271,8 +311,12 @@ app.post('/api/score', async (req, res) => {
         let allTimeRank = null;
         let isNewBest = false;
 
-        // Add to Redis daily leaderboard (keeps best score per member key)
-        if (redisClient.isOpen) {
+        // Add to Redis daily leaderboard (try to connect if not connected)
+        if (!isRedisAvailable()) {
+            await ensureRedisConnection();
+        }
+        
+        if (isRedisAvailable()) {
             try {
                 const dailyKey = getDailyKey();
                 const existingScore = await redisClient.zScore(dailyKey, memberKey);
@@ -341,7 +385,7 @@ app.get('/api/stats', async (req, res) => {
         let dailyCount = 0;
         let allTimeCount = 0;
 
-        if (redisClient.isOpen) {
+        if (isRedisAvailable()) {
             try {
                 const dailyKey = getDailyKey();
                 dailyCount = await redisClient.zCard(dailyKey);
@@ -443,7 +487,7 @@ app.delete('/api/admin/score/:id', async (req, res) => {
         await pgPool.query('DELETE FROM scores WHERE id = $1', [scoreId]);
         
         // Try to remove from Redis daily leaderboard too
-        if (redisClient.isOpen) {
+        if (isRedisAvailable()) {
             try {
                 const dailyKey = getDailyKey();
                 const memberKey = `${username}::${discord || ''}`;
@@ -473,7 +517,12 @@ app.delete('/api/admin/scores/clear-daily', async (req, res) => {
         return res.status(403).json({ success: false, error: 'Unauthorized' });
     }
     
-    if (!redisClient.isOpen) {
+    // Try to connect to Redis
+    if (!isRedisAvailable()) {
+        await ensureRedisConnection();
+    }
+    
+    if (!isRedisAvailable()) {
         return res.status(503).json({ success: false, error: 'Redis not connected' });
     }
     
@@ -626,7 +675,7 @@ app.get('/api/user/profile', async (req, res) => {
         // Check Redis for cached profile
         let profile = null;
         
-        if (redisClient.isOpen) {
+        if (isRedisAvailable()) {
             try {
                 const cached = await redisClient.get(`profile:${cleanPlayerId}`);
                 if (cached) {
@@ -717,7 +766,7 @@ app.post('/api/user/profile', async (req, res) => {
         };
         
         // Cache in Redis for 30 days
-        if (redisClient.isOpen) {
+        if (isRedisAvailable()) {
             try {
                 await redisClient.set(`profile:${cleanPlayerId}`, JSON.stringify(profile), {
                     EX: 30 * 24 * 60 * 60 // 30 days
@@ -771,13 +820,8 @@ async function startServer() {
     let redisConnected = false;
     let pgConnected = false;
 
-    // Connect to Redis
-    try {
-        await redisClient.connect();
-        redisConnected = true;
-    } catch (err) {
-        console.error('⚠ Failed to connect to Redis (Daily Leaderboard disabled):', err.message);
-    }
+    // Try to connect to Redis (non-blocking, will reconnect on demand)
+    redisConnected = await ensureRedisConnection();
 
     // Initialize PostgreSQL table
     try {
@@ -819,7 +863,11 @@ async function startServer() {
 // Graceful shutdown
 process.on('SIGINT', async () => {
     console.log('\nShutting down...');
-    if (redisClient.isOpen) await redisClient.quit();
+    if (isRedisAvailable()) {
+        try {
+            await redisClient.quit();
+        } catch (e) { /* ignore */ }
+    }
     await pgPool.end();
     process.exit(0);
 });
