@@ -286,44 +286,28 @@ app.post('/api/score', async (req, res) => {
             }
         }
 
-        // PostgreSQL: Keep only highest score per player_id
+        // PostgreSQL: Always insert the score, leaderboard will show best per player
         try {
+            // Always insert the score
+            await pgPool.query(
+                'INSERT INTO scores (username, discord, score, player_id, ip_hash, is_flagged) VALUES ($1, $2, $3, $4, $5, $6)',
+                [cleanUsername, cleanDiscord, score, cleanPlayerId, ipHash, isFlagged]
+            );
+            
+            // Check if this is a new best for this player
             if (cleanPlayerId) {
-                // Check if player already has a score
-                const existingResult = await pgPool.query(
-                    'SELECT id, score FROM scores WHERE player_id = $1 ORDER BY score DESC LIMIT 1',
+                const bestResult = await pgPool.query(
+                    'SELECT MAX(score) as best FROM scores WHERE player_id = $1',
                     [cleanPlayerId]
                 );
-                
-                if (existingResult.rows.length > 0) {
-                    const existingBest = existingResult.rows[0].score;
-                    if (score > existingBest) {
-                        // New best score - update the existing record
-                        await pgPool.query(
-                            'UPDATE scores SET username = $1, discord = $2, score = $3, ip_hash = $4, is_flagged = $5, created_at = CURRENT_TIMESTAMP WHERE player_id = $6',
-                            [cleanUsername, cleanDiscord, score, ipHash, isFlagged, cleanPlayerId]
-                        );
-                        isNewBest = true;
-                    }
-                    // If not a new best, don't insert (no duplicates)
-                } else {
-                    // First score for this player
-                    await pgPool.query(
-                        'INSERT INTO scores (username, discord, score, player_id, ip_hash, is_flagged) VALUES ($1, $2, $3, $4, $5, $6)',
-                        [cleanUsername, cleanDiscord, score, cleanPlayerId, ipHash, isFlagged]
-                    );
+                if (bestResult.rows[0]?.best === score) {
                     isNewBest = true;
                 }
             } else {
-                // No player_id - insert as anonymous (legacy behavior)
-                await pgPool.query(
-                    'INSERT INTO scores (username, discord, score, ip_hash, is_flagged) VALUES ($1, $2, $3, $4, $5)',
-                    [cleanUsername, cleanDiscord, score, ipHash, isFlagged]
-                );
-                isNewBest = true;
+                isNewBest = true; // Anonymous scores are always "new"
             }
 
-            // Calculate all-time rank
+            // Calculate all-time rank (based on best scores per player)
             const allTimeResult = await pgPool.query(
                 'SELECT COUNT(DISTINCT COALESCE(player_id, id::text)) as rank FROM scores WHERE score > $1 AND is_flagged = FALSE',
                 [score]
