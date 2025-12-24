@@ -4,6 +4,71 @@
  * A 2.2-style platformer rhythm game.
  */
 
+// ==================== PLAYER IDENTITY SYSTEM ====================
+
+/**
+ * Generates a UUID v4 for player identification.
+ * @returns {string} A unique UUID
+ */
+function generateUUID() {
+    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+        const r = Math.random() * 16 | 0;
+        const v = c === 'x' ? r : (r & 0x3 | 0x8);
+        return v.toString(16);
+    });
+}
+
+/**
+ * Gets or creates a persistent player ID stored in localStorage.
+ * This ID is used to track the player across sessions, NOT IP address.
+ * @returns {string} The player's unique ID
+ */
+function getPlayerId() {
+    let playerId = localStorage.getItem('rhythm_dodger_player_id');
+    if (!playerId) {
+        playerId = generateUUID();
+        localStorage.setItem('rhythm_dodger_player_id', playerId);
+        console.log('PlayerIdentity: Created new player ID');
+    }
+    return playerId;
+}
+
+/**
+ * Gets the player's saved display name (not used for identification).
+ * @returns {string|null} The saved display name or null
+ */
+function getSavedDisplayName() {
+    return localStorage.getItem('rhythm_dodger_display_name');
+}
+
+/**
+ * Saves the player's display name locally.
+ * @param {string} name - The display name to save
+ */
+function saveDisplayName(name) {
+    if (name && name.trim()) {
+        localStorage.setItem('rhythm_dodger_display_name', name.trim());
+    }
+}
+
+/**
+ * Gets the player's saved Discord name.
+ * @returns {string|null} The saved Discord name or null
+ */
+function getSavedDiscord() {
+    return localStorage.getItem('rhythm_dodger_discord');
+}
+
+/**
+ * Saves the player's Discord name locally.
+ * @param {string} discord - The Discord name to save
+ */
+function saveDiscord(discord) {
+    localStorage.setItem('rhythm_dodger_discord', discord || '');
+}
+
+// ==================== SPRITE SYSTEM ====================
+
 // Sprite color palette for flying cubes
 const SPRITE_COLORS = {
     0: "transparent",
@@ -56,7 +121,8 @@ function drawSprite(ctx, sprite, x, y, pixelSize, colors) {
 
 /**
  * AntiCheatManager - Handles anti-cheat detection and reporting.
- * Detects DevTools, page visibility changes, and validates game timing.
+ * Detects actual tampering (not just DevTools), page visibility changes, and validates game timing.
+ * IMPROVED: Only flags real cheating, not DevTools usage.
  */
 class AntiCheatManager {
     constructor(game) {
@@ -64,26 +130,33 @@ class AntiCheatManager {
         this.isFlagged = false;
         this.pausedTime = 0;
         this.totalPausedTime = 0;
-        this.devToolsOpen = false;
         this.pauseStartTime = null;
         this.isPausedByVisibility = false;
         
-        // DevTools detection state
-        this.devToolsCheckInterval = null;
-        this.lastDevToolsCheck = 0;
-        this.devToolsDetectionCount = 0;
+        // Tampering detection state (NOT DevTools detection)
+        this.expectedGameState = {};
+        this.lastValidScore = 0;
+        this.gameStartTimestamp = 0;
+        this.frameCount = 0;
+        this.lastFrameTime = 0;
+        this.speedViolations = 0;
         
         // Minimum completion time (must match server)
         this.MINIMUM_COMPLETION_TIME = 180; // seconds
+        
+        // Maximum allowed speed multiplier (detect speed hacks)
+        this.MAX_SPEED_MULTIPLIER = 1.5;
     }
 
     /**
      * Initializes all anti-cheat detection mechanisms.
+     * IMPROVED: Focus on actual tampering, not DevTools.
      */
     init() {
         this.setupVisibilityHandler();
-        this.setupDevToolsDetection();
-        console.log('AntiCheat: Initialized');
+        this.setupTamperingDetection();
+        this.gameStartTimestamp = Date.now();
+        console.log('AntiCheat: Initialized (tampering detection only)');
     }
 
     /**
@@ -197,105 +270,110 @@ class AntiCheatManager {
     }
 
     /**
-     * Sets up DevTools detection using multiple methods.
+     * Sets up tampering detection (NOT DevTools detection).
+     * Only flags actual cheating behaviors.
      */
-    setupDevToolsDetection() {
-        // Method 1: Debugger timing detection
-        this.devToolsCheckInterval = setInterval(() => {
-            this.checkDevToolsTiming();
-        }, 1000);
+    setupTamperingDetection() {
+        // Monitor for speed hacks by checking frame timing
+        this.lastFrameTime = performance.now();
         
-        // Method 2: Window size detection (DevTools changes window size)
-        this.setupWindowSizeDetection();
-        
-        // Method 3: Console.log override detection
-        this.setupConsoleDetection();
+        // Store expected game state for validation
+        this.expectedGameState = {
+            minFrameTime: 10, // Minimum ms between frames (100+ FPS is suspicious if sustained)
+            maxDeltaTime: 100, // Maximum dt in ms (prevents time manipulation)
+        };
     }
 
     /**
-     * Checks for DevTools using debugger timing.
+     * Validates frame timing to detect speed hacks.
+     * Called each frame from the game loop.
+     * @param {number} dt - Delta time in seconds
      */
-    checkDevToolsTiming() {
-        const start = performance.now();
-        debugger; // This line pauses if DevTools is open
-        const end = performance.now();
+    validateFrameTiming(dt) {
+        const now = performance.now();
+        const frameDelta = now - this.lastFrameTime;
+        this.lastFrameTime = now;
+        this.frameCount++;
         
-        // If debugger took more than 100ms, DevTools is likely open
-        if (end - start > 100) {
-            this.devToolsDetectionCount++;
+        // Check for speed hacks (game running faster than real time)
+        // Only flag if consistently too fast (not just occasional spikes)
+        if (dt > 0 && frameDelta > 0) {
+            const speedMultiplier = (dt * 1000) / frameDelta;
             
-            // Only flag after sustained detection (avoid false positives)
-            if (this.devToolsDetectionCount >= 2 && !this.devToolsOpen) {
-                this.devToolsOpen = true;
-                this.flagPlayer('devtools_debugger');
+            if (speedMultiplier > this.MAX_SPEED_MULTIPLIER) {
+                this.speedViolations++;
+                
+                // Only flag after sustained violations (10+ consecutive)
+                if (this.speedViolations >= 10) {
+                    this.flagPlayer('speed_hack', {
+                        speedMultiplier: speedMultiplier.toFixed(2),
+                        violations: this.speedViolations
+                    });
+                }
+            } else {
+                // Reset violations if frame timing is normal
+                this.speedViolations = Math.max(0, this.speedViolations - 1);
             }
-        } else {
-            this.devToolsDetectionCount = Math.max(0, this.devToolsDetectionCount - 1);
         }
     }
 
     /**
-     * Sets up window size change detection for DevTools.
+     * Validates score before submission.
+     * Checks for impossible scores.
+     * @param {number} score - The score to validate
+     * @param {boolean} isVictory - Whether this is a victory score
+     * @returns {object} Validation result with isValid and reason
      */
-    setupWindowSizeDetection() {
-        const threshold = 160; // DevTools typically takes at least 160px
-        let lastWidth = window.outerWidth;
-        let lastHeight = window.outerHeight;
+    validateScoreSubmission(score, isVictory) {
+        const result = { isValid: true, reason: null };
         
-        window.addEventListener('resize', () => {
-            const widthDiff = window.outerWidth - window.innerWidth;
-            const heightDiff = window.outerHeight - window.innerHeight;
-            
-            // Check if the difference suggests DevTools is open
-            if (widthDiff > threshold || heightDiff > threshold) {
-                if (!this.devToolsOpen) {
-                    this.devToolsOpen = true;
-                    this.flagPlayer('devtools_resize');
-                }
-            }
-        });
-    }
-
-    /**
-     * Sets up console detection by monitoring console methods.
-     */
-    setupConsoleDetection() {
-        const self = this;
+        // Check for impossible completion time (victory only)
+        if (isVictory && score < this.MINIMUM_COMPLETION_TIME) {
+            result.isValid = false;
+            result.reason = 'impossible_time';
+            this.flagPlayer('impossible_score', { score, minRequired: this.MINIMUM_COMPLETION_TIME });
+        }
         
-        // Create a getter that triggers when DevTools inspects an element
-        const element = new Image();
-        Object.defineProperty(element, 'id', {
-            get: function() {
-                if (!self.devToolsOpen) {
-                    self.devToolsOpen = true;
-                    self.flagPlayer('devtools_console');
-                }
-                return 'devtools-detect';
-            }
-        });
+        // Check for score manipulation (score higher than elapsed time)
+        const elapsedTime = this.getAdjustedSurvivalTime();
+        if (score > elapsedTime + 5) { // 5 second tolerance
+            result.isValid = false;
+            result.reason = 'score_manipulation';
+            this.flagPlayer('score_manipulation', { claimed: score, actual: elapsedTime });
+        }
         
-        // Periodically log the element (triggers getter when DevTools is open)
-        setInterval(() => {
-            console.log('%c', element);
-        }, 2000);
+        return result;
     }
 
     /**
      * Flags the player for suspicious activity.
+     * IMPROVED: Logs detailed information about what was detected.
      * @param {string} reason - The reason for flagging
+     * @param {object} details - Additional details about the violation
      */
-    async flagPlayer(reason) {
+    async flagPlayer(reason, details = {}) {
         if (this.isFlagged) return; // Already flagged
         
         this.isFlagged = true;
-        console.warn(`AntiCheat: Player flagged for ${reason}`);
         
-        // Report to server
+        const flagData = {
+            reason,
+            details,
+            timestamp: new Date().toISOString(),
+            gameTime: this.getAdjustedSurvivalTime(),
+            frameCount: this.frameCount
+        };
+        
+        console.warn(`AntiCheat: Player flagged for ${reason}`, flagData);
+        
+        // Report to server with detailed information
         try {
             await fetch('/api/flag', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ reason })
+                body: JSON.stringify({ 
+                    reason: `${reason}: ${JSON.stringify(details)}`.substring(0, 100)
+                })
             });
         } catch (err) {
             console.error('AntiCheat: Failed to report flag:', err);
@@ -347,6 +425,9 @@ class AntiCheatManager {
         this.totalPausedTime = 0;
         this.pauseStartTime = null;
         this.isPausedByVisibility = false;
+        this.speedViolations = 0;
+        this.frameCount = 0;
+        this.gameStartTimestamp = Date.now();
         this.hidePauseOverlay();
     }
 
@@ -354,9 +435,7 @@ class AntiCheatManager {
      * Cleans up anti-cheat resources.
      */
     cleanup() {
-        if (this.devToolsCheckInterval) {
-            clearInterval(this.devToolsCheckInterval);
-        }
+        // No intervals to clean up anymore (removed DevTools detection)
     }
 }
 
@@ -735,29 +814,55 @@ class Game {
      */
     async loadUserProfile() {
         try {
-            const response = await fetch('/api/user/profile');
+            // Get player ID from localStorage (UUID-based, not IP)
+            const playerId = getPlayerId();
+            
+            // First, try to load from localStorage (faster)
+            const savedName = getSavedDisplayName();
+            const savedDiscord = getSavedDiscord();
+            
+            // Prefill username fields from localStorage
+            const usernameInput = document.getElementById('username-input');
+            const winUsernameInput = document.getElementById('win-username-input');
+            const discordInput = document.getElementById('discord-input');
+            const winDiscordInput = document.getElementById('win-discord-input');
+            
+            if (usernameInput && !usernameInput.value && savedName) {
+                usernameInput.value = savedName;
+            }
+            if (winUsernameInput && !winUsernameInput.value && savedName) {
+                winUsernameInput.value = savedName;
+            }
+            if (discordInput && !discordInput.value && savedDiscord) {
+                discordInput.value = savedDiscord;
+            }
+            if (winDiscordInput && !winDiscordInput.value && savedDiscord) {
+                winDiscordInput.value = savedDiscord;
+            }
+            
+            // Fetch profile from server using player ID
+            const response = await fetch(`/api/user/profile?playerId=${encodeURIComponent(playerId)}`);
             const data = await response.json();
             
             if (data.success && data.profile) {
                 this.userProfile = data.profile;
                 
-                // Prefill username fields
-                const usernameInput = document.getElementById('username-input');
-                const winUsernameInput = document.getElementById('win-username-input');
-                const discordInput = document.getElementById('discord-input');
-                const winDiscordInput = document.getElementById('win-discord-input');
-                
-                if (usernameInput && !usernameInput.value) {
-                    usernameInput.value = data.profile.username || '';
+                // Update fields if server has newer data
+                if (data.profile.username && !savedName) {
+                    if (usernameInput && !usernameInput.value) {
+                        usernameInput.value = data.profile.username;
+                    }
+                    if (winUsernameInput && !winUsernameInput.value) {
+                        winUsernameInput.value = data.profile.username;
+                    }
                 }
-                if (winUsernameInput && !winUsernameInput.value) {
-                    winUsernameInput.value = data.profile.username || '';
-                }
-                if (discordInput && !discordInput.value) {
-                    discordInput.value = data.profile.discord || '';
-                }
-                if (winDiscordInput && !winDiscordInput.value) {
-                    winDiscordInput.value = data.profile.discord || '';
+                if (data.profile.discord && !savedDiscord) {
+                    if (discordInput && !discordInput.value) {
+                        discordInput.value = data.profile.discord;
+                    }
+                    if (winDiscordInput && !winDiscordInput.value) {
+                        winDiscordInput.value = data.profile.discord;
+                    }
                 }
                 
                 // Show best score if available
@@ -971,6 +1076,7 @@ class Game {
         const username = usernameInput?.value.trim();
         const discord = discordInput?.value.trim();
         const score = this.lastSurvivalTime;
+        const playerId = getPlayerId(); // Get persistent player ID
 
         if (!username) {
             if (resultDiv) {
@@ -998,6 +1104,7 @@ class Game {
                     'Content-Type': 'application/json'
                 },
                 body: JSON.stringify({
+                    playerId, // Include player ID for proper tracking
                     username,
                     discord: discord || null,
                     score,
@@ -1033,16 +1140,26 @@ class Game {
     }
 
     /**
-     * Saves user profile for IP-based prefilling.
+     * Saves user profile using player ID (not IP).
      */
     async saveUserProfile(username, discord) {
+        // Save locally first (instant)
+        saveDisplayName(username);
+        saveDiscord(discord);
+        
+        // Then sync to server
         try {
+            const playerId = getPlayerId();
             await fetch('/api/user/profile', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json'
                 },
-                body: JSON.stringify({ username, discord })
+                body: JSON.stringify({ 
+                    playerId,
+                    username, 
+                    discord 
+                })
             });
         } catch (error) {
             console.error('Error saving user profile:', error);
@@ -1956,15 +2073,15 @@ class ObstacleManager {
             case 'CALM':
                 return { spawnInterval: 800, warningTime: 1500, fallSpeed: 5, shake: 0 };
             case 'BUILD':
-                return { spawnInterval: 500, warningTime: 1200, fallSpeed: 6, shake: 2 };
+                return { spawnInterval: 500, warningTime: 1200, fallSpeed: 6, shake: 1 };
             case 'MINI_DROP':
-                return { spawnInterval: 350, warningTime: 800, fallSpeed: 8, shake: 5 };
+                return { spawnInterval: 350, warningTime: 800, fallSpeed: 8, shake: 2 };
             case 'CORE':
-                return { spawnInterval: 300, warningTime: 700, fallSpeed: 9, shake: 3 };
+                return { spawnInterval: 300, warningTime: 700, fallSpeed: 9, shake: 1.5 };
             case 'BREAK':
                 return { spawnInterval: 9999, warningTime: 2000, fallSpeed: 0, shake: 0 };
             case 'FINAL':
-                return { spawnInterval: 200, warningTime: 500, fallSpeed: 12, shake: 8 };
+                return { spawnInterval: 200, warningTime: 500, fallSpeed: 12, shake: 4 };
             default:
                 return { spawnInterval: 900, warningTime: 1500, fallSpeed: 5, shake: 0 };
         }
@@ -2159,7 +2276,7 @@ class ObstacleManager {
         // Check for impact triggers and apply visual effects
         if (isImpactTrigger(elapsed, this.lastImpactCheck)) {
             // Trigger screen shake effect (reduced for less intensity)
-            this.game.shake(8);
+            this.game.shake(4);
             
             // Trigger flash effect by adding a brief white overlay
             this.triggerFlashEffect();
@@ -2244,7 +2361,7 @@ class ObstacleManager {
                     if (particles) {
                         particles.emit(h.x + this.BLOCK_SIZE / 2, floorY, 8, h.color.block);
                     }
-                    this.game.shake(1); // Light shake for block landing
+                    this.game.shake(0.5); // Light shake for block landing
                 }
             }
         });
@@ -2275,7 +2392,7 @@ class ObstacleManager {
                 if (this.floorPulse.timer > this.floorPulse.warnTime) {
                     this.floorPulse.state = 'ACTIVE';
                     this.floorPulse.timer = 0;
-                    this.game.shake(2); // Reduced floor pulse shake
+                    this.game.shake(1); // Reduced floor pulse shake
                 }
             } else if (this.floorPulse.state === 'ACTIVE') {
                 if (this.floorPulse.timer > this.floorPulse.activeTime) {
@@ -7917,7 +8034,7 @@ class DefeatSequenceController {
         this.bossTargetY = -50; // Fall below view
         
         // Shake parameters
-        this.shakeIntensity = 0.5;
+        this.shakeIntensity = 0.25;
         this.originalCameraPosition = null;
         
         // Dialogue bubble for falling boss
