@@ -8626,6 +8626,92 @@ class Arena3DManager {
         this.nukeBalls = [];
         this.pillarCount = 3; // 3 pillars around boss (Requirements: 6.6)
         this.pillarDistance = 8; // Distance from boss center
+        
+        // Loading state
+        this.isLoading = false;
+        this.loadingProgress = 0;
+        this.assetsToLoad = 3; // dome, center model, player model
+        this.assetsLoaded = 0;
+    }
+
+    /**
+     * Shows the loading screen.
+     */
+    showLoadingScreen() {
+        const loadingScreen = document.getElementById('arena-loading-screen');
+        if (loadingScreen) {
+            loadingScreen.classList.remove('hidden');
+            loadingScreen.classList.add('active');
+        }
+        this.updateLoadingProgress(0, 'Initializing...');
+    }
+
+    /**
+     * Hides the loading screen.
+     */
+    hideLoadingScreen() {
+        const loadingScreen = document.getElementById('arena-loading-screen');
+        if (loadingScreen) {
+            loadingScreen.classList.add('hidden');
+            loadingScreen.classList.remove('active');
+        }
+    }
+
+    /**
+     * Updates the loading progress bar and status.
+     * @param {number} progress - Progress percentage (0-100)
+     * @param {string} status - Status message to display
+     */
+    updateLoadingProgress(progress, status) {
+        const loadingBar = document.getElementById('loading-bar');
+        const loadingStatus = document.getElementById('loading-status');
+        const loadingTip = document.getElementById('loading-tip');
+        
+        if (loadingBar) {
+            loadingBar.style.width = `${progress}%`;
+        }
+        if (loadingStatus) {
+            loadingStatus.textContent = status;
+        }
+        
+        // Random tips
+        const tips = [
+            'Prepare for the final confrontation',
+            'Collect shards to weaken the void',
+            'Dodge the hazards to survive',
+            'The void awaits your challenge',
+            'Stay focused, stay alive'
+        ];
+        if (loadingTip && progress === 0) {
+            loadingTip.textContent = tips[Math.floor(Math.random() * tips.length)];
+        }
+    }
+
+    /**
+     * Called when an asset finishes loading.
+     * @param {string} assetName - Name of the loaded asset
+     */
+    onAssetLoaded(assetName) {
+        this.assetsLoaded++;
+        const progress = Math.round((this.assetsLoaded / this.assetsToLoad) * 100);
+        this.updateLoadingProgress(progress, `Loading ${assetName}...`);
+        
+        // Check if all assets are loaded
+        if (this.assetsLoaded >= this.assetsToLoad) {
+            this.updateLoadingProgress(100, 'Ready!');
+            setTimeout(() => {
+                this.hideLoadingScreen();
+                this.onAllAssetsLoaded();
+            }, 500);
+        }
+    }
+
+    /**
+     * Called when all assets are loaded.
+     */
+    onAllAssetsLoaded() {
+        console.log('Arena3D: All assets loaded');
+        this.isLoading = false;
     }
 
     /**
@@ -8847,9 +8933,11 @@ class Arena3DManager {
     loadSciFiDome() {
         if (typeof THREE.GLTFLoader === 'undefined') {
             console.warn('GLTFLoader not available for dome');
+            this.onAssetLoaded('Dome (fallback)');
             return;
         }
 
+        this.updateLoadingProgress(10, 'Loading arena dome...');
         const loader = new THREE.GLTFLoader();
         
         loader.load(
@@ -8873,10 +8961,17 @@ class Arena3DManager {
                 
                 this.scene.add(this.domeModel);
                 console.log('Sci-fi dome loaded');
+                this.onAssetLoaded('Arena Dome');
             },
-            null,
+            (progress) => {
+                if (progress.total > 0) {
+                    const percent = Math.round((progress.loaded / progress.total) * 30);
+                    this.updateLoadingProgress(10 + percent, 'Loading arena dome...');
+                }
+            },
             (error) => {
                 console.error('Error loading dome model:', error);
+                this.onAssetLoaded('Dome (error)');
             }
         );
     }
@@ -9117,9 +9212,11 @@ class Arena3DManager {
         if (typeof THREE.GLTFLoader === 'undefined') {
             console.warn('GLTFLoader not available, falling back to simple sphere');
             this.createFallbackSphere();
+            this.onAssetLoaded('Boss (fallback)');
             return;
         }
 
+        this.updateLoadingProgress(40, 'Loading boss entity...');
         const loader = new THREE.GLTFLoader();
         
         loader.load(
@@ -9164,11 +9261,18 @@ class Arena3DManager {
                 }
                 
                 console.log('Center model loaded with stainless steel texture');
+                this.onAssetLoaded('Boss Entity');
             },
-            null,
+            (progress) => {
+                if (progress.total > 0) {
+                    const percent = Math.round((progress.loaded / progress.total) * 30);
+                    this.updateLoadingProgress(40 + percent, 'Loading boss entity...');
+                }
+            },
             (error) => {
                 console.error('Error loading GLTF model:', error);
                 this.createFallbackSphere();
+                this.onAssetLoaded('Boss (error)');
             }
         );
     }
@@ -9254,9 +9358,11 @@ class Arena3DManager {
         if (typeof THREE.GLTFLoader === 'undefined') {
             console.warn('GLTFLoader not available for player');
             this.createFallbackPlayer();
+            this.onAssetLoaded('Player (fallback)');
             return;
         }
 
+        this.updateLoadingProgress(70, 'Loading player model...');
         const loader = new THREE.GLTFLoader();
         
         loader.load(
@@ -9288,11 +9394,18 @@ class Arena3DManager {
                 }
                 
                 console.log('Player energy sphere loaded');
+                this.onAssetLoaded('Player Model');
             },
-            null,
+            (progress) => {
+                if (progress.total > 0) {
+                    const percent = Math.round((progress.loaded / progress.total) * 30);
+                    this.updateLoadingProgress(70 + percent, 'Loading player model...');
+                }
+            },
             (error) => {
                 console.error('Error loading player model:', error);
                 this.createFallbackPlayer();
+                this.onAssetLoaded('Player (error)');
             }
         );
         
@@ -9832,49 +9945,58 @@ class Arena3DManager {
     }
 
     /**
-     * Starts the 3D arena.
+     * Starts the 3D arena with loading screen.
      */
     start() {
-        if (!this.init()) {
-            console.error('Failed to initialize 3D arena');
-            return;
-        }
+        // Show loading screen first
+        this.showLoadingScreen();
+        this.isLoading = true;
+        this.assetsLoaded = 0;
+        
+        // Small delay to ensure loading screen is visible
+        setTimeout(() => {
+            if (!this.init()) {
+                console.error('Failed to initialize 3D arena');
+                this.hideLoadingScreen();
+                return;
+            }
 
-        this.active = true;
-        this.timer = 0;
-        this.hazards = [];
-        this.lastHazardSpawnTime = Date.now();
-        this.cameraAngle = 0; // Reset camera angle
+            this.active = true;
+            this.timer = 0;
+            this.hazards = [];
+            this.lastHazardSpawnTime = Date.now();
+            this.cameraAngle = 0; // Reset camera angle
+            
+            // Initialize shard system - Requirements: 5.1, 5.5
+            this.shards = [];
+            this.shardCount = 0;
+            this.lastShardSpawnTime = Date.now();
+            this.shardUIElement = null;
+            
+            // Reset Phase 2 state - Requirements: 6.1
+            this.phase2State = 'COLLECTING';
+            this.phase2Triggered = false;
+            this.playerControlsPaused = false;
+            this.cameraPanProgress = 0;
+            this.bossGrowthProgress = 0;
+            if (this.dialogueBubble) {
+                this.dialogueBubble.cleanup();
+                this.dialogueBubble = null;
+            }
         
-        // Initialize shard system - Requirements: 5.1, 5.5
-        this.shards = [];
-        this.shardCount = 0;
-        this.lastShardSpawnTime = Date.now();
-        this.shardUIElement = null;
-        
-        // Reset Phase 2 state - Requirements: 6.1
-        this.phase2State = 'COLLECTING';
-        this.phase2Triggered = false;
-        this.playerControlsPaused = false;
-        this.cameraPanProgress = 0;
-        this.bossGrowthProgress = 0;
-        if (this.dialogueBubble) {
-            this.dialogueBubble.cleanup();
-            this.dialogueBubble = null;
-        }
-        
-        // Reset Pillar and NukeBall system - Requirements: 6.6, 7.1
-        this.cleanupPillarsAndNukeBalls();
+            // Reset Pillar and NukeBall system - Requirements: 6.6, 7.1
+            this.cleanupPillarsAndNukeBalls();
 
-        // Hide 2D canvas, show 3D
-        const canvas2D = document.getElementById('game-canvas');
-        if (canvas2D) canvas2D.style.display = 'none';
+            // Hide 2D canvas, show 3D
+            const canvas2D = document.getElementById('game-canvas');
+            if (canvas2D) canvas2D.style.display = 'none';
 
-        // Show timer UI
-        this.updateTimerDisplay();
+            // Show timer UI
+            this.updateTimerDisplay();
         
-        // Show shard UI - Requirements: 5.5
-        this.updateShardUI();
+            // Show shard UI - Requirements: 5.5
+            this.updateShardUI();
+        }, 100); // Small delay for loading screen to appear
     }
 
     /**
