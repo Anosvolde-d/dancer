@@ -234,11 +234,12 @@ app.get('/api/leaderboard/daily', async (req, res) => {
 app.get('/api/leaderboard/all-time', async (req, res) => {
     try {
         // Get best score per player_id to avoid duplicates
+        // Use COALESCE for is_flagged to handle NULL values
         const result = await pgPool.query(`
             SELECT DISTINCT ON (COALESCE(player_id, id::text)) 
                 username, discord, score, created_at, player_id
             FROM scores
-            WHERE is_flagged = FALSE
+            WHERE COALESCE(is_flagged, FALSE) = FALSE
             ORDER BY COALESCE(player_id, id::text), score DESC
         `);
         
@@ -353,7 +354,7 @@ app.post('/api/score', async (req, res) => {
 
             // Calculate all-time rank (based on best scores per player)
             const allTimeResult = await pgPool.query(
-                'SELECT COUNT(DISTINCT COALESCE(player_id, id::text)) as rank FROM scores WHERE score > $1 AND is_flagged = FALSE',
+                'SELECT COUNT(DISTINCT COALESCE(player_id, id::text)) as rank FROM scores WHERE score > $1 AND COALESCE(is_flagged, FALSE) = FALSE',
                 [score]
             );
             allTimeRank = parseInt(allTimeResult.rows[0].rank) + 1;
