@@ -2,6 +2,7 @@
  * RHYTHM DODGER - Backend Server
  * 
  * Handles leaderboard API endpoints with Redis (daily) and PostgreSQL (all-time)
+ * Uses player_id (UUID) for identity tracking instead of IP addresses
  */
 
 // Load environment variables from .env file
@@ -63,9 +64,9 @@ pgPool.on('error', (err) => console.error('PostgreSQL Pool Error:', err.message)
 // Anti-cheat: Minimum completion time (Stage 1: 60s + Stage 2: 60s + Boss Phase 1: 30s + Boss Phase 2: 30s)
 const MINIMUM_COMPLETION_TIME = 180;
 
-// Helper function to get IP hash
+// Helper function to get IP hash (used only for rate limiting/logging, not identity)
 function getIpHash(req) {
-    const ip = req.headers['x-forwarded-for']?.split(',')[0] || 
+    const ip = req.headers['x-forwarded-for']?.split(',')[0] ||
                req.socket?.remoteAddress ||
                'unknown';
     return Buffer.from(ip).toString('base64').substring(0, 20);
@@ -74,13 +75,14 @@ function getIpHash(req) {
 // Initialize database tables
 async function initDatabase() {
     try {
-        // Create scores table with anti-cheat columns
+        // Create scores table with player_id for identity tracking
         await pgPool.query(`
             CREATE TABLE IF NOT EXISTS scores (
                 id SERIAL PRIMARY KEY,
                 username VARCHAR(50) NOT NULL,
                 discord VARCHAR(100),
                 score FLOAT NOT NULL,
+                player_id VARCHAR(50),
                 ip_hash VARCHAR(50),
                 is_flagged BOOLEAN DEFAULT FALSE,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -89,13 +91,16 @@ async function initDatabase() {
         
         // Add columns if they don't exist (for existing databases)
         await pgPool.query(`
-            DO $$ 
+            DO $$
             BEGIN
                 IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='scores' AND column_name='ip_hash') THEN
                     ALTER TABLE scores ADD COLUMN ip_hash VARCHAR(50);
                 END IF;
                 IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='scores' AND column_name='is_flagged') THEN
                     ALTER TABLE scores ADD COLUMN is_flagged BOOLEAN DEFAULT FALSE;
+                END IF;
+                IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='scores' AND column_name='player_id') THEN
+                    ALTER TABLE scores ADD COLUMN player_id VARCHAR(50);
                 END IF;
             END $$;
         `);
@@ -111,7 +116,19 @@ async function initDatabase() {
             )
         `);
         
-        console.log('✓ PostgreSQL tables "scores" and "flags" ready');
+        // Create player_profiles table for storing user preferences by player_id
+        await pgPool.query(`
+            CREATE TABLE IF NOT EXISTS player_profiles (
+                id SERIAL PRIMARY KEY,
+                player_id VARCHAR(50) UNIQUE NOT NULL,
+                username VARCHAR(50),
+                discord VARCHAR(100),
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        `);
+        
+        console.log('✓ PostgreSQL tables "scores", "flags", and "player_profiles" ready');
     } catch (err) {
         console.error('Error initializing database:', err.message);
     }
@@ -137,11 +154,12 @@ function getDailyKey() {
     return `leaderboard:daily:${today}`;
 }
 
+
 // API Routes
 
 /**
  * GET /api/leaderboard/daily
- * Returns top 40 scores from Redis for the current day
+ * Returns top 40 scores from Redis for the current day (best per player)
  */
 app.get('/api/leaderboard/daily', async (req, res) => {
     if (!redisClient.isOpen) {
@@ -171,23 +189,23 @@ app.get('/api/leaderboard/daily', async (req, res) => {
 
 /**
  * GET /api/leaderboard/all-time
- * Returns top 40 scores from PostgreSQL (all-time)
+ * Returns top 40 scores from PostgreSQL (all-time, best per player_id - no duplicates)
  */
 app.get('/api/leaderboard/all-time', async (req, res) => {
-    // Check if Postgres pool is usable (rough check)
-    if (pgPool.totalCount === 0 && pgPool.idleCount === 0 && pgPool.waitingCount === 0) {
-        // Pool might be dead/empty if init failed
-    }
-
     try {
+        // Get best score per player_id to avoid duplicates
         const result = await pgPool.query(`
-            SELECT username, discord, score, created_at
+            SELECT DISTINCT ON (COALESCE(player_id, id::text)) 
+                username, discord, score, created_at, player_id
             FROM scores
-            ORDER BY score DESC
-            LIMIT 40
+            WHERE is_flagged = FALSE
+            ORDER BY COALESCE(player_id, id::text), score DESC
         `);
+        
+        // Sort by score descending and take top 40
+        const sortedRows = result.rows.sort((a, b) => b.score - a.score).slice(0, 40);
 
-        const leaderboard = result.rows.map((row, index) => ({
+        const leaderboard = sortedRows.map((row, index) => ({
             rank: index + 1,
             username: row.username,
             discord: row.discord || '',
@@ -205,14 +223,13 @@ app.get('/api/leaderboard/all-time', async (req, res) => {
 
 /**
  * POST /api/score
- * Submits a new score to both Redis (daily) and PostgreSQL (all-time)
- * Includes anti-cheat validation for minimum completion time (only for victory scores)
- * Body: { username: string, discord: string, score: number, isVictory: boolean }
+ * Submits a new score - keeps only the highest score per player_id
+ * Body: { playerId: string, username: string, discord: string, score: number, isVictory: boolean }
  */
 app.post('/api/score', async (req, res) => {
     try {
-        const { username, discord, score, isVictory } = req.body;
-        const ipHash = getIpHash(req);
+        const { playerId, username, discord, score, isVictory } = req.body;
+        const ipHash = getIpHash(req); // Used only for rate limiting/logging
 
         // Validate input
         if (!username || typeof username !== 'string' || username.trim().length === 0) {
@@ -224,9 +241,7 @@ app.post('/api/score', async (req, res) => {
         }
 
         // Anti-cheat: Check minimum completion time ONLY for victory scores
-        // Players who die early can still submit their scores
         if (isVictory && score < MINIMUM_COMPLETION_TIME) {
-            // Flag the player for time violation (claiming victory too fast)
             try {
                 await pgPool.query(
                     'INSERT INTO flags (ip_hash, reason) VALUES ($1, $2)',
@@ -246,6 +261,7 @@ app.post('/api/score', async (req, res) => {
 
         const cleanUsername = username.trim().substring(0, 50);
         const cleanDiscord = (discord || '').trim().substring(0, 100);
+        const cleanPlayerId = (playerId || '').trim().substring(0, 50) || null;
         const memberKey = `${cleanUsername}::${cleanDiscord}`;
 
         // Check if this IP is flagged
@@ -253,9 +269,9 @@ app.post('/api/score', async (req, res) => {
 
         let dailyRank = null;
         let allTimeRank = null;
-        let scoreId = null;
+        let isNewBest = false;
 
-        // Add to Redis daily leaderboard
+        // Add to Redis daily leaderboard (keeps best score per member key)
         if (redisClient.isOpen) {
             try {
                 const dailyKey = getDailyKey();
@@ -263,23 +279,53 @@ app.post('/api/score', async (req, res) => {
                 if (existingScore === null || score > existingScore) {
                     await redisClient.zAdd(dailyKey, { score: score, value: memberKey });
                 }
-                await redisClient.expire(dailyKey, 86400); // 24 hours in seconds
+                await redisClient.expire(dailyKey, 86400); // 24 hours
                 dailyRank = await redisClient.zRevRank(dailyKey, memberKey);
             } catch (rkErr) {
                 console.error("Redis score submit error:", rkErr.message);
             }
         }
 
-        // Add to PostgreSQL (all-time history) with IP hash and flag status
+        // PostgreSQL: Keep only highest score per player_id
         try {
-            const insertResult = await pgPool.query(
-                'INSERT INTO scores (username, discord, score, ip_hash, is_flagged) VALUES ($1, $2, $3, $4, $5) RETURNING id',
-                [cleanUsername, cleanDiscord, score, ipHash, isFlagged]
-            );
-            scoreId = insertResult.rows[0]?.id;
+            if (cleanPlayerId) {
+                // Check if player already has a score
+                const existingResult = await pgPool.query(
+                    'SELECT id, score FROM scores WHERE player_id = $1 ORDER BY score DESC LIMIT 1',
+                    [cleanPlayerId]
+                );
+                
+                if (existingResult.rows.length > 0) {
+                    const existingBest = existingResult.rows[0].score;
+                    if (score > existingBest) {
+                        // New best score - update the existing record
+                        await pgPool.query(
+                            'UPDATE scores SET username = $1, discord = $2, score = $3, ip_hash = $4, is_flagged = $5, created_at = CURRENT_TIMESTAMP WHERE player_id = $6',
+                            [cleanUsername, cleanDiscord, score, ipHash, isFlagged, cleanPlayerId]
+                        );
+                        isNewBest = true;
+                    }
+                    // If not a new best, don't insert (no duplicates)
+                } else {
+                    // First score for this player
+                    await pgPool.query(
+                        'INSERT INTO scores (username, discord, score, player_id, ip_hash, is_flagged) VALUES ($1, $2, $3, $4, $5, $6)',
+                        [cleanUsername, cleanDiscord, score, cleanPlayerId, ipHash, isFlagged]
+                    );
+                    isNewBest = true;
+                }
+            } else {
+                // No player_id - insert as anonymous (legacy behavior)
+                await pgPool.query(
+                    'INSERT INTO scores (username, discord, score, ip_hash, is_flagged) VALUES ($1, $2, $3, $4, $5)',
+                    [cleanUsername, cleanDiscord, score, ipHash, isFlagged]
+                );
+                isNewBest = true;
+            }
 
+            // Calculate all-time rank
             const allTimeResult = await pgPool.query(
-                'SELECT COUNT(*) as rank FROM scores WHERE score > $1',
+                'SELECT COUNT(DISTINCT COALESCE(player_id, id::text)) as rank FROM scores WHERE score > $1 AND is_flagged = FALSE',
                 [score]
             );
             allTimeRank = parseInt(allTimeResult.rows[0].rank) + 1;
@@ -289,9 +335,10 @@ app.post('/api/score', async (req, res) => {
 
         res.json({
             success: true,
-            message: 'Score submitted!',
+            message: isNewBest ? 'New best score!' : 'Score submitted!',
             dailyRank: dailyRank !== null ? dailyRank + 1 : null,
             allTimeRank: allTimeRank,
+            isNewBest: isNewBest,
             flagged: isFlagged
         });
 
@@ -318,14 +365,15 @@ app.get('/api/stats', async (req, res) => {
         }
 
         try {
-            const allTimeResult = await pgPool.query('SELECT COUNT(*) as count FROM scores');
+            // Count unique players instead of total scores
+            const allTimeResult = await pgPool.query('SELECT COUNT(DISTINCT COALESCE(player_id, id::text)) as count FROM scores');
             allTimeCount = parseInt(allTimeResult.rows[0].count);
         } catch (e) { /* ignore */ }
 
         res.json({
             success: true,
             dailyPlayers: dailyCount,
-            totalGames: allTimeCount
+            totalPlayers: allTimeCount
         });
     } catch (err) {
         console.error('Error fetching stats:', err);
@@ -333,11 +381,11 @@ app.get('/api/stats', async (req, res) => {
     }
 });
 
+
 /**
  * POST /api/admin/validate
  * Validates admin code against environment variable
  * Body: { code: string }
- * Returns: { valid: true/false }
  */
 app.post('/api/admin/validate', (req, res) => {
     const { code } = req.body;
@@ -352,7 +400,7 @@ app.post('/api/admin/validate', (req, res) => {
 
 /**
  * GET /api/admin/scores
- * Returns all scores for admin management with IP hash and flag status
+ * Returns all scores for admin management
  * Query: { code: string }
  */
 app.get('/api/admin/scores', async (req, res) => {
@@ -365,7 +413,7 @@ app.get('/api/admin/scores', async (req, res) => {
     
     try {
         const result = await pgPool.query(`
-            SELECT id, username, discord, score, ip_hash, is_flagged, created_at
+            SELECT id, username, discord, score, player_id, ip_hash, is_flagged, created_at
             FROM scores
             ORDER BY score DESC
             LIMIT 100
@@ -380,7 +428,7 @@ app.get('/api/admin/scores', async (req, res) => {
 
 /**
  * DELETE /api/admin/score/:id
- * Deletes a score from the database (requires admin validation)
+ * Deletes a score from the database
  * Body: { code: string }
  */
 app.delete('/api/admin/score/:id', async (req, res) => {
@@ -397,9 +445,8 @@ app.delete('/api/admin/score/:id', async (req, res) => {
     }
     
     try {
-        // Get the score details before deleting (for Redis cleanup)
         const scoreResult = await pgPool.query(
-            'SELECT username, discord, score FROM scores WHERE id = $1',
+            'SELECT username, discord FROM scores WHERE id = $1',
             [scoreId]
         );
         
@@ -409,7 +456,6 @@ app.delete('/api/admin/score/:id', async (req, res) => {
         
         const { username, discord } = scoreResult.rows[0];
         
-        // Delete from PostgreSQL
         await pgPool.query('DELETE FROM scores WHERE id = $1', [scoreId]);
         
         // Try to remove from Redis daily leaderboard too
@@ -432,7 +478,7 @@ app.delete('/api/admin/score/:id', async (req, res) => {
 
 /**
  * DELETE /api/admin/scores/clear-daily
- * Clears all daily scores from Redis (requires admin validation)
+ * Clears all daily scores from Redis
  * Body: { code: string }
  */
 app.delete('/api/admin/scores/clear-daily', async (req, res) => {
@@ -459,7 +505,7 @@ app.delete('/api/admin/scores/clear-daily', async (req, res) => {
 
 /**
  * POST /api/flag
- * Reports suspicious activity (DevTools, DOM manipulation, etc.)
+ * Reports suspicious activity
  * Body: { reason: string }
  */
 app.post('/api/flag', async (req, res) => {
@@ -473,7 +519,6 @@ app.post('/api/flag', async (req, res) => {
         
         const cleanReason = reason.trim().substring(0, 100);
         
-        // Insert flag into database
         await pgPool.query(
             'INSERT INTO flags (ip_hash, reason) VALUES ($1, $2)',
             [ipHash, cleanReason]
@@ -502,7 +547,6 @@ app.get('/api/admin/flags', async (req, res) => {
     }
     
     try {
-        // Get all flags grouped by IP hash
         const flagsResult = await pgPool.query(`
             SELECT ip_hash, reason, timestamp
             FROM flags
@@ -510,13 +554,12 @@ app.get('/api/admin/flags', async (req, res) => {
             LIMIT 200
         `);
         
-        // Get scores associated with flagged IPs
         const flaggedIps = [...new Set(flagsResult.rows.map(f => f.ip_hash))];
         
         let associatedScores = [];
         if (flaggedIps.length > 0) {
             const scoresResult = await pgPool.query(`
-                SELECT id, username, discord, score, ip_hash, created_at
+                SELECT id, username, discord, score, player_id, ip_hash, created_at
                 FROM scores
                 WHERE ip_hash = ANY($1)
                 ORDER BY score DESC
@@ -524,7 +567,6 @@ app.get('/api/admin/flags', async (req, res) => {
             associatedScores = scoresResult.rows;
         }
         
-        // Group flags by IP hash
         const flagsByIp = {};
         flagsResult.rows.forEach(flag => {
             if (!flagsByIp[flag.ip_hash]) {
@@ -540,7 +582,6 @@ app.get('/api/admin/flags', async (req, res) => {
             });
         });
         
-        // Add associated scores to each IP
         associatedScores.forEach(score => {
             if (flagsByIp[score.ip_hash]) {
                 flagsByIp[score.ip_hash].scores.push(score);
@@ -573,8 +614,6 @@ app.delete('/api/admin/flag/:ipHash', async (req, res) => {
     
     try {
         await pgPool.query('DELETE FROM flags WHERE ip_hash = $1', [ipHash]);
-        
-        // Also unflag their scores
         await pgPool.query('UPDATE scores SET is_flagged = FALSE WHERE ip_hash = $1', [ipHash]);
         
         res.json({ success: true, message: 'Flags cleared for IP' });
@@ -584,46 +623,58 @@ app.delete('/api/admin/flag/:ipHash', async (req, res) => {
     }
 });
 
+
 /**
  * GET /api/user/profile
- * Returns user profile based on IP (username, best score)
- * Uses IP address to identify returning users
+ * Returns user profile based on player_id (UUID from localStorage)
+ * Query: { playerId: string }
  */
 app.get('/api/user/profile', async (req, res) => {
     try {
-        // Get client IP
-        const ip = req.headers['x-forwarded-for']?.split(',')[0] || 
-                   req.connection?.remoteAddress || 
-                   req.socket?.remoteAddress ||
-                   'unknown';
+        const { playerId } = req.query;
         
-        // Hash the IP for privacy (simple hash)
-        const ipHash = Buffer.from(ip).toString('base64').substring(0, 20);
+        if (!playerId) {
+            return res.json({ success: true, profile: null });
+        }
         
-        // Check Redis for cached user profile
+        const cleanPlayerId = playerId.trim().substring(0, 50);
+        
+        // Check Redis for cached profile
         let profile = null;
         
         if (redisClient.isOpen) {
             try {
-                const cached = await redisClient.get(`user:${ipHash}`);
+                const cached = await redisClient.get(`profile:${cleanPlayerId}`);
                 if (cached) {
                     profile = JSON.parse(cached);
                 }
             } catch (e) { /* ignore */ }
         }
         
-        // If no cached profile, try to find from recent scores
+        // If no cached profile, check player_profiles table
         if (!profile) {
             try {
-                // Get the most recent score from this session (last 24 hours)
-                const result = await pgPool.query(`
-                    SELECT username, discord, MAX(score) as best_score
-                    FROM scores
-                    WHERE created_at > NOW() - INTERVAL '7 days'
-                    GROUP BY username, discord
-                    ORDER BY MAX(created_at) DESC
-                    LIMIT 1
-                `);
+                const result = await pgPool.query(
+                    'SELECT username, discord FROM player_profiles WHERE player_id = $1',
+                    [cleanPlayerId]
+                );
+                
+                if (result.rows.length > 0) {
+                    profile = {
+                        username: result.rows[0].username,
+                        discord: result.rows[0].discord || ''
+                    };
+                }
+            } catch (e) { /* ignore */ }
+        }
+        
+        // If still no profile, try to get from scores
+        if (!profile) {
+            try {
+                const result = await pgPool.query(
+                    'SELECT username, discord, MAX(score) as best_score FROM scores WHERE player_id = $1 GROUP BY username, discord ORDER BY MAX(created_at) DESC LIMIT 1',
+                    [cleanPlayerId]
+                );
                 
                 if (result.rows.length > 0) {
                     profile = {
@@ -638,7 +689,7 @@ app.get('/api/user/profile', async (req, res) => {
         res.json({ 
             success: true, 
             profile: profile || null,
-            ipHash: ipHash
+            playerId: cleanPlayerId
         });
     } catch (err) {
         console.error('Error fetching user profile:', err.message);
@@ -648,32 +699,43 @@ app.get('/api/user/profile', async (req, res) => {
 
 /**
  * POST /api/user/profile
- * Saves user profile based on IP
- * Body: { username: string, discord: string }
+ * Saves user profile based on player_id
+ * Body: { playerId: string, username: string, discord: string }
  */
 app.post('/api/user/profile', async (req, res) => {
     try {
-        const { username, discord } = req.body;
+        const { playerId, username, discord } = req.body;
         
-        // Get client IP
-        const ip = req.headers['x-forwarded-for']?.split(',')[0] || 
-                   req.connection?.remoteAddress || 
-                   req.socket?.remoteAddress ||
-                   'unknown';
+        if (!playerId) {
+            return res.status(400).json({ success: false, error: 'Player ID is required' });
+        }
         
-        // Hash the IP for privacy
-        const ipHash = Buffer.from(ip).toString('base64').substring(0, 20);
+        const cleanPlayerId = playerId.trim().substring(0, 50);
+        const cleanUsername = (username || '').trim().substring(0, 50);
+        const cleanDiscord = (discord || '').trim().substring(0, 100);
+        
+        // Upsert into player_profiles table
+        try {
+            await pgPool.query(`
+                INSERT INTO player_profiles (player_id, username, discord, updated_at)
+                VALUES ($1, $2, $3, CURRENT_TIMESTAMP)
+                ON CONFLICT (player_id) 
+                DO UPDATE SET username = $2, discord = $3, updated_at = CURRENT_TIMESTAMP
+            `, [cleanPlayerId, cleanUsername, cleanDiscord]);
+        } catch (e) {
+            console.error('Error saving to player_profiles:', e.message);
+        }
         
         const profile = {
-            username: (username || '').trim().substring(0, 50),
-            discord: (discord || '').trim().substring(0, 100),
+            username: cleanUsername,
+            discord: cleanDiscord,
             lastUpdated: new Date().toISOString()
         };
         
         // Cache in Redis for 30 days
         if (redisClient.isOpen) {
             try {
-                await redisClient.set(`user:${ipHash}`, JSON.stringify(profile), {
+                await redisClient.set(`profile:${cleanPlayerId}`, JSON.stringify(profile), {
                     EX: 30 * 24 * 60 * 60 // 30 days
                 });
             } catch (e) { 
@@ -690,23 +752,28 @@ app.post('/api/user/profile', async (req, res) => {
 
 /**
  * GET /api/user/best-score
- * Returns the best score for a given username
- * Query: { username: string }
+ * Returns the best score for a given player_id or username
+ * Query: { playerId: string } or { username: string }
  */
 app.get('/api/user/best-score', async (req, res) => {
     try {
-        const { username } = req.query;
+        const { playerId, username } = req.query;
         
-        if (!username) {
-            return res.json({ success: true, bestScore: null });
+        let bestScore = null;
+        
+        if (playerId) {
+            const result = await pgPool.query(
+                'SELECT MAX(score) as best_score FROM scores WHERE player_id = $1',
+                [playerId.trim()]
+            );
+            bestScore = result.rows[0]?.best_score || null;
+        } else if (username) {
+            const result = await pgPool.query(
+                'SELECT MAX(score) as best_score FROM scores WHERE username = $1',
+                [username.trim()]
+            );
+            bestScore = result.rows[0]?.best_score || null;
         }
-        
-        const result = await pgPool.query(
-            'SELECT MAX(score) as best_score FROM scores WHERE username = $1',
-            [username.trim()]
-        );
-        
-        const bestScore = result.rows[0]?.best_score || null;
         
         res.json({ success: true, bestScore });
     } catch (err) {
