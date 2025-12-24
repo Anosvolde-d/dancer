@@ -1,0 +1,8 @@
+Model Information:
+* title:	Energy sphere game prop
+* source:	https://sketchfab.com/3d-models/energy-sphere-game-prop-a44366b10a76416b841d88c3f16bbc2e
+* author:	assetfactory (https://sketchfab.com/assetfactory)
+
+Model License:
+* license type:	SKETCHFAB Standard (https://sketchfab.com/licenses)
+* requirements:	Under basic restrictions, use worldwide, on all types of media, commercially or not, and in all types of derivative works
