@@ -404,6 +404,15 @@ body.pulse-bg #background-layer {
     padding-right: 5px;
 }
 
+/* Leaderboard Panel Visibility */
+.leaderboard-panel {
+    display: none;
+}
+
+.leaderboard-panel.active {
+    display: block;
+}
+
 /* Custom Scrollbar */
 .leaderboard-content::-webkit-scrollbar {
     width: 4px;
