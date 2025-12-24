@@ -229,24 +229,21 @@ app.get('/api/leaderboard/daily', async (req, res) => {
 
 /**
  * GET /api/leaderboard/all-time
- * Returns top 40 scores from PostgreSQL (all-time, best per player_id - no duplicates)
+ * Returns top 40 scores from PostgreSQL (all-time)
  */
 app.get('/api/leaderboard/all-time', async (req, res) => {
     try {
-        // Get best score per player_id to avoid duplicates
-        // Use COALESCE for is_flagged to handle NULL values
+        // Simple query - just get top 40 scores ordered by score (no flagged filter for now)
         const result = await pgPool.query(`
-            SELECT DISTINCT ON (COALESCE(player_id, id::text)) 
-                username, discord, score, created_at, player_id
+            SELECT username, discord, score, created_at
             FROM scores
-            WHERE COALESCE(is_flagged, FALSE) = FALSE
-            ORDER BY COALESCE(player_id, id::text), score DESC
+            ORDER BY score DESC
+            LIMIT 40
         `);
-        
-        // Sort by score descending and take top 40
-        const sortedRows = result.rows.sort((a, b) => b.score - a.score).slice(0, 40);
 
-        const leaderboard = sortedRows.map((row, index) => ({
+        console.log(`All-time leaderboard: Found ${result.rows.length} scores`);
+
+        const leaderboard = result.rows.map((row, index) => ({
             rank: index + 1,
             username: row.username,
             discord: row.discord || '',
@@ -256,7 +253,6 @@ app.get('/api/leaderboard/all-time', async (req, res) => {
 
         res.json({ success: true, leaderboard });
     } catch (err) {
-        // Return empty instead of error to keep UI clean if DB is down
         console.error('Error fetching all-time leaderboard:', err.message);
         res.json({ success: true, leaderboard: [] });
     }
