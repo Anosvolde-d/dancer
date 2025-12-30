@@ -1,0 +1,429 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="mobile-web-app-capable" content="yes">
+    <title>Rhythm Dodger - Void Knight</title>
+    <link rel="stylesheet" href="styles.css">
+    <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;700&family=Orbitron:wght@400;700&display=swap"
+        rel="stylesheet">
+    <!-- Three.js for 3D background effects -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <!-- GLTFLoader for loading 3D models -->
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
+</head>
+
+<body>
+    <!-- Mobile Orientation/Fullscreen Overlay -->
+    <div id="mobile-setup-overlay" class="mobile-setup-overlay hidden">
+        <div class="mobile-setup-content">
+            <div class="mobile-setup-icon">📱</div>
+            <h1 class="mobile-setup-title">MOBILE DETECTED</h1>
+            <p class="mobile-setup-message">For the best experience:</p>
+            <div class="mobile-setup-steps">
+                <div class="setup-step" id="step-landscape">
+                    <span class="step-icon">🔄</span>
+                    <span class="step-text">Rotate to landscape mode</span>
+                    <span class="step-status" id="landscape-status">❌</span>
+                </div>
+                <div class="setup-step" id="step-fullscreen">
+                    <span class="step-icon">⛶</span>
+                    <span class="step-text">Enable fullscreen</span>
+                    <span class="step-status" id="fullscreen-status">❌</span>
+                </div>
+            </div>
+            <button id="fullscreen-btn" class="mobile-setup-btn">
+                <span class="btn-icon">⛶</span>
+                GO FULLSCREEN
+            </button>
+            <button id="skip-setup-btn" class="mobile-skip-btn">
+                Skip and play anyway
+            </button>
+        </div>
+    </div>
+
+    <div id="game-container">
+        <!-- Background Layer for stage backgrounds -->
+        <div id="background-layer"></div>
+        
+        <!-- Three.js Background Layer -->
+        <div id="three-container"></div>
+
+        <!-- Canvas for 2D gameplay -->
+        <canvas id="game-canvas"></canvas>
+
+        <!-- UI Overlay -->
+        <div id="ui-layer">
+            <div id="hud" class="hidden">
+                <div id="score-container">TIME: <span id="timer">00:00</span></div>
+                <div id="beat-indicator">♪</div>
+            </div>
+
+            <div id="start-screen" class="screen active">
+                <!-- Admin Settings Button -->
+                <button id="settings-btn" class="settings-btn" title="Admin Settings">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <circle cx="12" cy="12" r="3"></circle>
+                        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+                    </svg>
+                </button>
+                
+                <!-- Hollow Knight themed decorative mask -->
+                <div class="hk-mask-decoration"></div>
+                
+                <h1 class="title">HOLLOW KNIGHT</h1>
+                <h2 class="subtitle">⚔ VOID VESSEL ⚔</h2>
+                
+                <!-- Leaderboard Section -->
+                <div class="leaderboard-container">
+                    <div class="leaderboard-tabs">
+                        <button class="tab-btn active" data-tab="daily">DAILY</button>
+                        <button class="tab-btn" data-tab="alltime">ALL-TIME</button>
+                    </div>
+                    <div class="leaderboard-content">
+                        <div id="daily-leaderboard" class="leaderboard-panel active">
+                            <table class="leaderboard-table">
+                                <thead>
+                                    <tr>
+                                        <th class="rank">#</th>
+                                        <th>Player</th>
+                                        <th class="score">Time</th>
+                                        <th class="discord">Discord</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr><td colspan="4" class="leaderboard-loading">Loading...</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                        <div id="alltime-leaderboard" class="leaderboard-panel">
+                            <table class="leaderboard-table">
+                                <thead>
+                                    <tr>
+                                        <th class="rank">#</th>
+                                        <th>Player</th>
+                                        <th class="score">Time</th>
+                                        <th class="discord">Discord</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr><td colspan="4" class="leaderboard-loading">Loading...</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                    <div class="leaderboard-stats">
+                        <span id="daily-players">0 players today</span>
+                        <span id="total-games">0 total games</span>
+                    </div>
+                </div>
+
+                <div class="instructions">
+                    <div class="key-group">
+                        <span class="key">A</span> / <span class="key">D</span>
+                        <span class="label">MOVE</span>
+                    </div>
+                    <div class="key-group">
+                        <span class="key">SPACE</span>
+                        <span class="label">JUMP</span>
+                    </div>
+                </div>
+                <p class="audio-note">⚠️ Uses Music: Use Headphones for Best Experience</p>
+                <button id="start-btn" class="btn-primary">INITIATE CONNECTION</button>
+            </div>
+
+            <div id="game-over-screen" class="screen hidden">
+                <h1 class="title text-red">VESSEL BROKEN</h1>
+                <p id="final-score">SURVIVED: 00:00</p>
+                
+                <!-- Score Submission Form -->
+                <div id="score-submission" class="score-form">
+                    <h3 class="form-title">SUBMIT YOUR SCORE</h3>
+                    <div class="form-group">
+                        <input type="text" id="username-input" placeholder="Username" maxlength="50" required>
+                    </div>
+                    <div class="form-group">
+                        <input type="text" id="discord-input" placeholder="Discord Name (optional)" maxlength="100">
+                    </div>
+                    <button id="submit-score-btn" class="btn-submit">SUBMIT SCORE</button>
+                    <div id="submission-result" class="submission-result hidden"></div>
+                </div>
+                
+                <button id="restart-btn" class="btn-primary">RETRY</button>
+            </div>
+
+            <div id="win-screen" class="screen hidden">
+                <h1 class="title text-blue">NIGHTMARE CONQUERED</h1>
+                <p>You have survived the ritual.</p>
+                <p id="win-score">SURVIVED: 03:00</p>
+                
+                <!-- Score Submission Form for Win -->
+                <div id="win-score-submission" class="score-form">
+                    <h3 class="form-title">SUBMIT YOUR VICTORY</h3>
+                    <div class="form-group">
+                        <input type="text" id="win-username-input" placeholder="Username" maxlength="50" required>
+                    </div>
+                    <div class="form-group">
+                        <input type="text" id="win-discord-input" placeholder="Discord Name (optional)" maxlength="100">
+                    </div>
+                    <button id="win-submit-score-btn" class="btn-submit">SUBMIT SCORE</button>
+                    <div id="win-submission-result" class="submission-result hidden"></div>
+                </div>
+                
+                <button id="menu-btn" class="btn-primary">RETURN</button>
+            </div>
+
+            <div id="stage-complete-screen" class="screen hidden">
+                <h1 class="title text-gold">STAGE COMPLETE!</h1>
+                <p class="stage-message">Wow, you won the stage! Now, let's go to the next!</p>
+                <p class="rest-message">Take a break if ya want</p>
+                <button id="continue-btn" class="btn-primary btn-continue">CONTINUE</button>
+            </div>
+
+            <!-- Boss Victory Screen - Requirements: 5.1, 5.2 -->
+            <div id="boss-victory-screen" class="screen hidden">
+                <h1 class="title text-boss-victory">VOID CONQUERED</h1>
+                <p class="boss-victory-message">send a screen to me in the help thread, you monster</p>
+                <button id="boss-victory-menu-btn" class="btn-primary">RETURN TO MENU</button>
+            </div>
+
+            <!-- 3D Arena Loading Screen -->
+            <div id="arena-loading-screen" class="screen hidden">
+                <div class="loading-content">
+                    <h1 class="title loading-title">ENTERING THE VOID</h1>
+                    <div class="loading-spinner">
+                        <div class="spinner-ring"></div>
+                        <div class="spinner-ring"></div>
+                        <div class="spinner-ring"></div>
+                    </div>
+                    <p class="loading-status" id="loading-status">Initializing...</p>
+                    <div class="loading-bar-container">
+                        <div class="loading-bar" id="loading-bar"></div>
+                    </div>
+                    <p class="loading-tip" id="loading-tip">Prepare for the final confrontation</p>
+                </div>
+            </div>
+
+            <!-- Reward Screen - Shows when player earns a reward -->
+            <div id="reward-screen" class="screen hidden">
+                <div class="reward-content">
+                    <div class="reward-icon">🎁</div>
+                    <h1 class="title text-gold">REWARD EARNED!</h1>
+                    <p class="reward-message" id="reward-message">Congratulations!</p>
+                    <div class="reward-code-container">
+                        <div class="reward-code-box">
+                            <span class="reward-code" id="reward-code">CODE</span>
+                            <button id="copy-reward-btn" class="copy-btn" title="Copy to clipboard">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                                    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                                </svg>
+                            </button>
+                        </div>
+                        <span class="copy-feedback" id="copy-feedback">Copied!</span>
+                    </div>
+                    <button id="reward-continue-btn" class="btn-primary">CONTINUE</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Audio Element -->
+    <audio id="bg-music" crossorigin="anonymous" preload="auto"></audio>
+
+    <!-- Audio Error Toast -->
+    <div id="audio-error-toast" class="audio-toast hidden">
+        <div class="toast-content">
+            <span class="toast-icon">🔇</span>
+            <span class="toast-message">Audio failed to load</span>
+            <div class="toast-actions">
+                <button id="audio-retry-btn" class="toast-btn">Retry</button>
+                <button id="audio-continue-btn" class="toast-btn">Continue Without Audio</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Admin Menu Overlay -->
+    <div id="admin-overlay" class="admin-overlay hidden">
+        <!-- Password Prompt Modal -->
+        <div id="admin-password-modal" class="admin-modal">
+            <div class="admin-modal-content">
+                <h2 class="admin-modal-title">ADMIN ACCESS</h2>
+                <p class="admin-modal-subtitle">Enter admin code to continue</p>
+                <div class="admin-form-group">
+                    <input type="password" id="admin-code-input" class="admin-input" placeholder="Enter code..." autocomplete="off">
+                </div>
+                <div id="admin-error" class="admin-error hidden">Access Denied</div>
+                <div class="admin-modal-buttons">
+                    <button id="admin-submit-btn" class="admin-btn admin-btn-primary">VALIDATE</button>
+                    <button id="admin-cancel-btn" class="admin-btn admin-btn-secondary">CANCEL</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Cheat Menu (shown after authentication) -->
+        <div id="admin-cheat-menu" class="admin-modal hidden">
+            <div class="admin-modal-content admin-modal-large">
+                <h2 class="admin-modal-title">CHEAT MENU</h2>
+                <p class="admin-modal-subtitle">Select an option</p>
+                
+                <div class="admin-section">
+                    <h3 class="admin-section-title">STAGE SELECT</h3>
+                    <div class="admin-stage-buttons">
+                        <button class="admin-btn admin-stage-btn" data-stage="1">STAGE 1</button>
+                        <button class="admin-btn admin-stage-btn" data-stage="2">STAGE 2</button>
+                        <button class="admin-btn admin-stage-btn" data-stage="3">BOSS PHASE</button>
+                    </div>
+                </div>
+                
+                <div class="admin-section">
+                    <h3 class="admin-section-title">DEBUG OPTIONS</h3>
+                    <div class="admin-debug-buttons">
+                        <button id="admin-ending-btn" class="admin-btn admin-debug-btn">VIEW ENDING SCREEN</button>
+                        <button id="admin-3d-arena-btn" class="admin-btn admin-debug-btn">SKIP TO 3D ARENA</button>
+                        <button id="admin-rest-screen-btn" class="admin-btn admin-debug-btn">VIEW REST SCREEN</button>
+                        <button id="admin-preview-boss-death-btn" class="admin-btn admin-debug-btn">PREVIEW BOSS DEATH</button>
+                    </div>
+                </div>
+                
+                <div class="admin-section">
+                    <h3 class="admin-section-title">SCORE MANAGEMENT</h3>
+                    <div class="admin-score-buttons">
+                        <button id="admin-view-scores-btn" class="admin-btn admin-debug-btn">VIEW ALL SCORES</button>
+                        <button id="admin-view-flags-btn" class="admin-btn admin-danger-btn">VIEW FLAGGED PLAYERS</button>
+                        <button id="admin-clear-daily-btn" class="admin-btn admin-danger-btn">CLEAR DAILY LEADERBOARD</button>
+                    </div>
+                </div>
+                
+                <div class="admin-section">
+                    <h3 class="admin-section-title">REWARD SYSTEM</h3>
+                    <div class="admin-reward-buttons">
+                        <button id="admin-manage-rewards-btn" class="admin-btn admin-reward-btn">MANAGE REWARDS</button>
+                    </div>
+                </div>
+                
+                <div class="admin-modal-buttons">
+                    <button id="admin-close-btn" class="admin-btn admin-btn-secondary">CLOSE</button>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Rewards Management Modal -->
+        <div id="admin-rewards-modal" class="admin-modal hidden">
+            <div class="admin-modal-content admin-modal-large">
+                <h2 class="admin-modal-title">REWARD MANAGEMENT</h2>
+                <p class="admin-modal-subtitle">Create rewards for players who reach time thresholds</p>
+                
+                <!-- Add New Reward Form -->
+                <div class="admin-section">
+                    <h3 class="admin-section-title">ADD NEW REWARD</h3>
+                    <div class="reward-form">
+                        <div class="reward-form-row">
+                            <input type="number" id="reward-threshold-input" class="admin-input reward-input" placeholder="Threshold (seconds)" min="1" step="1">
+                        </div>
+                        <div class="reward-form-row">
+                            <textarea id="reward-message-input" class="admin-input reward-textarea" placeholder="Custom message for the player..." rows="2"></textarea>
+                        </div>
+                        <div class="reward-form-row">
+                            <input type="text" id="reward-code-input" class="admin-input reward-input" placeholder="Reward code (e.g., sk-xxx...)">
+                        </div>
+                        <div class="reward-form-row reward-options">
+                            <label class="reward-checkbox">
+                                <input type="checkbox" id="reward-onetime-input" checked>
+                                <span>One-time per player</span>
+                            </label>
+                        </div>
+                        <button id="add-reward-btn" class="admin-btn admin-btn-primary">ADD REWARD</button>
+                    </div>
+                </div>
+                
+                <!-- Existing Rewards List -->
+                <div class="admin-section">
+                    <h3 class="admin-section-title">ACTIVE REWARDS</h3>
+                    <div class="rewards-list" id="rewards-list">
+                        <p class="loading-text">Loading rewards...</p>
+                    </div>
+                </div>
+                
+                <div class="admin-modal-buttons">
+                    <button id="admin-rewards-back-btn" class="admin-btn admin-btn-secondary">BACK</button>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Score Management Modal -->
+        <div id="admin-scores-modal" class="admin-modal hidden">
+            <div class="admin-modal-content admin-modal-large">
+                <h2 class="admin-modal-title">SCORE MANAGEMENT</h2>
+                <p class="admin-modal-subtitle">Click on a score to delete it • ⚠️ = Flagged</p>
+                
+                <div class="admin-scores-list" id="admin-scores-list">
+                    <p class="loading-text">Loading scores...</p>
+                </div>
+                
+                <div class="admin-modal-buttons">
+                    <button id="admin-scores-back-btn" class="admin-btn admin-btn-secondary">BACK</button>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Flagged Players Modal -->
+        <div id="admin-flags-modal" class="admin-modal hidden">
+            <div class="admin-modal-content admin-modal-large">
+                <h2 class="admin-modal-title">FLAGGED PLAYERS</h2>
+                <p class="admin-modal-subtitle">Players detected for suspicious activity</p>
+                
+                <div class="admin-flags-list" id="admin-flags-list">
+                    <p class="loading-text">Loading flagged players...</p>
+                </div>
+                
+                <div class="admin-modal-buttons">
+                    <button id="admin-flags-back-btn" class="admin-btn admin-btn-secondary">BACK</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Mobile Controls for 2D Gameplay -->
+    <div id="mobile-controls" class="mobile-controls hidden">
+        <!-- Jump button on the left -->
+        <button id="mobile-jump-btn" class="mobile-btn mobile-jump">
+            <span>JUMP</span>
+        </button>
+        
+        <!-- Movement buttons on the right -->
+        <div class="mobile-movement">
+            <button id="mobile-left-btn" class="mobile-btn mobile-left">
+                <span>◀</span>
+            </button>
+            <button id="mobile-right-btn" class="mobile-btn mobile-right">
+                <span>▶</span>
+            </button>
+        </div>
+    </div>
+
+    <!-- Mobile Controls for 3D Arena (Boss Phase 2) -->
+    <div id="mobile-controls-3d" class="mobile-controls-3d hidden">
+        <!-- Jump button on the left -->
+        <button id="mobile-jump-btn-3d" class="mobile-btn mobile-jump">
+            <span>JUMP</span>
+        </button>
+        
+        <!-- Joystick on the right -->
+        <div id="mobile-joystick" class="mobile-joystick">
+            <div id="joystick-base" class="joystick-base">
+                <div id="joystick-stick" class="joystick-stick"></div>
+            </div>
+        </div>
+        
+        <!-- Camera rotation hint -->
+        <div class="camera-hint">Swipe screen to rotate camera</div>
+    </div>
+
+    <script src="game.js"></script>
+</body>
+
+</html>
