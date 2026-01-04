@@ -812,6 +812,186 @@ class AntiCheatManager {
             minFrameTime: 10, // Minimum ms between frames (100+ FPS is suspicious if sustained)
             maxDeltaTime: 100, // Maximum dt in ms (prevents time manipulation)
         };
+        
+        // Store original function references for integrity checking
+        this.originalFunctions = new Map();
+        this.functionCheckInterval = null;
+        
+        // Start function integrity monitoring after game initializes
+        setTimeout(() => this.setupFunctionIntegrityCheck(), 1000);
+    }
+    
+    /**
+     * Sets up function integrity checking to detect console tampering.
+     * Detects when critical game functions are overridden.
+     */
+    setupFunctionIntegrityCheck() {
+        if (!this.game) return;
+        
+        // Store references to critical functions
+        const criticalMethods = [
+            'gameOver',
+            'victory',
+            'showBossVictory',
+            'checkCollision'
+        ];
+        
+        // Store original function strings (for comparison)
+        criticalMethods.forEach(methodName => {
+            if (this.game[methodName]) {
+                this.originalFunctions.set(methodName, this.game[methodName].toString().substring(0, 100));
+            }
+        });
+        
+        // Also protect Player methods
+        if (this.game.player) {
+            const playerMethods = ['die', 'takeDamage', 'checkCollision'];
+            playerMethods.forEach(methodName => {
+                if (this.game.player[methodName]) {
+                    this.originalFunctions.set(`player.${methodName}`, this.game.player[methodName].toString().substring(0, 100));
+                }
+            });
+        }
+        
+        // Check integrity periodically
+        this.functionCheckInterval = setInterval(() => this.checkFunctionIntegrity(), 2000);
+    }
+    
+    /**
+     * Checks if critical functions have been tampered with.
+     */
+    checkFunctionIntegrity() {
+        if (!this.game || this.isFlagged) return;
+        
+        // Check Game methods
+        const gameMethods = ['gameOver', 'victory', 'showBossVictory', 'checkCollision'];
+        for (const methodName of gameMethods) {
+            if (this.game[methodName]) {
+                const currentStr = this.game[methodName].toString().substring(0, 100);
+                const originalStr = this.originalFunctions.get(methodName);
+                
+                if (originalStr && currentStr !== originalStr) {
+                    this.flagPlayer('function_tampering', { 
+                        function: methodName,
+                        type: 'game_method'
+                    });
+                    // Force game over for cheaters
+                    this.forceGameOverForCheater('Function tampering detected');
+                    return;
+                }
+            }
+        }
+        
+        // Check Player methods
+        if (this.game.player) {
+            const playerMethods = ['die', 'takeDamage', 'checkCollision'];
+            for (const methodName of playerMethods) {
+                if (this.game.player[methodName]) {
+                    const currentStr = this.game.player[methodName].toString().substring(0, 100);
+                    const originalStr = this.originalFunctions.get(`player.${methodName}`);
+                    
+                    if (originalStr && currentStr !== originalStr) {
+                        this.flagPlayer('function_tampering', { 
+                            function: `player.${methodName}`,
+                            type: 'player_method'
+                        });
+                        // Force game over for cheaters
+                        this.forceGameOverForCheater('Function tampering detected');
+                        return;
+                    }
+                }
+            }
+        }
+        
+        // Check if game object itself was replaced
+        if (window.game && window.game !== this.game) {
+            this.flagPlayer('game_object_replaced', {});
+            this.forceGameOverForCheater('Game object tampering detected');
+        }
+    }
+    
+    /**
+     * Forces game over for detected cheaters with a message.
+     * @param {string} reason - The reason for forcing game over
+     */
+    forceGameOverForCheater(reason) {
+        console.error(`AntiCheat: ${reason}`);
+        
+        // Clear the integrity check interval
+        if (this.functionCheckInterval) {
+            clearInterval(this.functionCheckInterval);
+        }
+        
+        // Show cheater message
+        this.showCheaterMessage(reason);
+        
+        // Force game state to prevent further play
+        if (this.game) {
+            this.game.gameState = 'GAME_OVER';
+            this.game.audio.pause();
+        }
+    }
+    
+    /**
+     * Shows a message to detected cheaters.
+     * @param {string} reason - The reason for detection
+     */
+    showCheaterMessage(reason) {
+        let overlay = document.getElementById('cheater-overlay');
+        if (!overlay) {
+            overlay = document.createElement('div');
+            overlay.id = 'cheater-overlay';
+            overlay.style.cssText = `
+                position: fixed;
+                top: 0;
+                left: 0;
+                width: 100%;
+                height: 100%;
+                background: rgba(30, 20, 40, 0.95);
+                display: flex;
+                flex-direction: column;
+                justify-content: center;
+                align-items: center;
+                z-index: 99999;
+                font-family: 'Courier New', monospace;
+            `;
+            overlay.innerHTML = `
+                <div style="text-align: center; max-width: 500px; padding: 2rem;">
+                    <div style="font-size: 4rem; margin-bottom: 1rem;">🤔</div>
+                    <h1 style="font-size: 2rem; color: #ffaa00; margin-bottom: 1rem;">Hmm...</h1>
+                    <p style="font-size: 1.2rem; color: #ffffff; margin-bottom: 1.5rem;">
+                        Sorry, but the anti-cheat thinks you cheated.
+                    </p>
+                    <p style="font-size: 1rem; color: #aaaaaa; margin-bottom: 2rem;">
+                        If you didn't cheat, please contact the creator to resolve this!
+                    </p>
+                    <p style="font-size: 0.9rem; color: #666666;">
+                        Your score won't be submitted and rewards are disabled.
+                    </p>
+                    <button onclick="location.reload()" style="
+                        margin-top: 2rem;
+                        padding: 0.8rem 2rem;
+                        font-size: 1rem;
+                        background: rgba(255, 170, 0, 0.2);
+                        border: 2px solid #ffaa00;
+                        color: #ffaa00;
+                        cursor: pointer;
+                        border-radius: 8px;
+                        font-family: inherit;
+                    ">Try Again</button>
+                </div>
+            `;
+            document.body.appendChild(overlay);
+        }
+        overlay.style.display = 'flex';
+    }
+    
+    /**
+     * Checks if the player is flagged for cheating.
+     * @returns {boolean} True if flagged
+     */
+    isPlayerFlagged() {
+        return this.isFlagged;
     }
 
     /**
@@ -973,7 +1153,11 @@ class AntiCheatManager {
      * Cleans up anti-cheat resources.
      */
     cleanup() {
-        // No intervals to clean up anymore (removed DevTools detection)
+        // Clear function integrity check interval
+        if (this.functionCheckInterval) {
+            clearInterval(this.functionCheckInterval);
+            this.functionCheckInterval = null;
+        }
     }
 }
 
@@ -1919,6 +2103,12 @@ class Game {
      * @returns {Promise<Object|null>} The reward object or null
      */
     async checkForReward(survivalTime) {
+        // Block rewards for flagged players
+        if (this.antiCheat && this.antiCheat.isPlayerFlagged()) {
+            console.log('Rewards blocked: player flagged by anti-cheat');
+            return null;
+        }
+        
         try {
             const playerId = getPlayerId();
             const response = await fetch('/api/rewards/check', {
@@ -2005,6 +2195,12 @@ class Game {
     }
 
     victory() {
+        // Check if player was flagged for cheating
+        if (this.antiCheat && this.antiCheat.isPlayerFlagged()) {
+            this.antiCheat.showCheaterMessage('Victory blocked');
+            return;
+        }
+        
         this.gameState = 'VICTORY';
         this.audio.pause();
 
