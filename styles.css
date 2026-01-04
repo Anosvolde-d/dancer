@@ -432,6 +432,9 @@ body.pulse-bg #background-layer {
     max-height: 280px;
     overflow-y: auto;
     padding-right: 5px;
+    -webkit-overflow-scrolling: touch; /* Smooth scrolling on iOS */
+    scrollbar-width: thin; /* Firefox */
+    scrollbar-color: var(--accent-blue) rgba(0, 0, 0, 0.2); /* Firefox */
 }
 
 /* Leaderboard Panel Visibility */
@@ -445,16 +448,21 @@ body.pulse-bg #background-layer {
 
 /* Custom Scrollbar */
 .leaderboard-content::-webkit-scrollbar {
-    width: 4px;
+    width: 6px;
 }
 
 .leaderboard-content::-webkit-scrollbar-track {
-    background: rgba(0, 0, 0, 0.2);
+    background: rgba(0, 0, 0, 0.3);
+    border-radius: 3px;
 }
 
 .leaderboard-content::-webkit-scrollbar-thumb {
     background: var(--accent-blue);
-    border-radius: 2px;
+    border-radius: 3px;
+}
+
+.leaderboard-content::-webkit-scrollbar-thumb:hover {
+    background: rgba(74, 174, 245, 0.8);
 }
 
 .leaderboard-table {
@@ -3339,13 +3347,17 @@ body.pulse-bg #background-layer {
         align-self: stretch;
         border-radius: 10px;
         background: rgba(15, 11, 21, 0.7);
+        display: flex;
+        flex-direction: column;
     }
     
-    /* Leaderboard content - show only ~4 scores */
+    /* Leaderboard content - allow scrolling */
     .leaderboard-content {
-        max-height: 75px;
-        min-height: 55px;
-        overflow-y: hidden;
+        max-height: calc(100% - 30px);
+        min-height: 60px;
+        overflow-y: auto;
+        -webkit-overflow-scrolling: touch;
+        flex: 1;
     }
     
     .leaderboard-tabs {
@@ -3460,10 +3472,11 @@ body.pulse-bg #background-layer {
         font-size: 0.5rem;
     }
     
-    /* Leaderboard - show only ~4 scores */
+    /* Leaderboard - allow scrolling */
     .leaderboard-content {
-        max-height: 60px;
-        overflow-y: hidden;
+        max-height: 70px;
+        overflow-y: auto;
+        -webkit-overflow-scrolling: touch;
     }
     
     .tab-btn {
@@ -3489,10 +3502,10 @@ body.pulse-bg #background-layer {
     display: none;
     justify-content: space-between;
     align-items: flex-end;
-    padding: 20px;
-    padding-bottom: max(20px, env(safe-area-inset-bottom));
-    padding-left: max(20px, env(safe-area-inset-left));
-    padding-right: max(20px, env(safe-area-inset-right));
+    padding: 15px 25px;
+    padding-bottom: max(15px, env(safe-area-inset-bottom));
+    padding-left: max(25px, env(safe-area-inset-left));
+    padding-right: max(25px, env(safe-area-inset-right));
     z-index: 1000;
     pointer-events: none;
 }
@@ -3506,17 +3519,18 @@ body.pulse-bg #background-layer {
     display: none !important;
 }
 
+/* Clean, minimal button style */
 .mobile-btn {
     pointer-events: auto;
-    background: linear-gradient(145deg, rgba(74, 174, 245, 0.25), rgba(157, 78, 221, 0.15));
-    border: 2px solid rgba(74, 174, 245, 0.5);
+    background: rgba(255, 255, 255, 0.08);
+    border: 2px solid rgba(255, 255, 255, 0.25);
     border-radius: 50%;
-    color: white;
+    color: rgba(255, 255, 255, 0.9);
     font-family: var(--font-ui);
-    font-size: 1rem;
-    font-weight: bold;
+    font-size: 0.9rem;
+    font-weight: 600;
     cursor: pointer;
-    transition: all 0.08s ease;
+    transition: all 0.1s ease;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -3528,63 +3542,91 @@ body.pulse-bg #background-layer {
     -webkit-appearance: none;
     appearance: none;
     outline: none;
-    box-shadow: 
-        0 4px 15px rgba(0, 0, 0, 0.3),
-        inset 0 1px 0 rgba(255, 255, 255, 0.1);
-    backdrop-filter: blur(5px);
-    -webkit-backdrop-filter: blur(5px);
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.3);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
 }
 
 .mobile-btn span {
-    text-shadow: 0 0 10px rgba(74, 174, 245, 0.8);
+    text-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
 }
 
 .mobile-btn:active,
 .mobile-btn.pressed {
-    background: linear-gradient(145deg, rgba(74, 174, 245, 0.6), rgba(157, 78, 221, 0.4));
-    transform: scale(0.9);
-    border-color: rgba(74, 174, 245, 1);
+    background: rgba(74, 174, 245, 0.4);
+    border-color: rgba(74, 174, 245, 0.8);
+    transform: scale(0.92);
     box-shadow: 
-        0 0 25px rgba(74, 174, 245, 0.6),
-        0 0 50px rgba(157, 78, 221, 0.3),
-        inset 0 0 15px rgba(74, 174, 245, 0.3);
+        0 0 20px rgba(74, 174, 245, 0.5),
+        inset 0 0 10px rgba(74, 174, 245, 0.2);
 }
 
+/* Jump button - larger, on the right */
 .mobile-jump {
-    width: 85px;
-    height: 85px;
-    font-size: 0.8rem;
+    width: 80px;
+    height: 80px;
+    font-size: 0.75rem;
     letter-spacing: 1px;
+    text-transform: uppercase;
 }
 
+/* Movement buttons container - on the left */
 .mobile-movement {
     display: flex;
-    gap: 10px;
+    gap: 12px;
+    align-items: center;
 }
 
+/* Direction buttons - clean arrows */
 .mobile-left, .mobile-right {
-    width: 70px;
-    height: 70px;
-    font-size: 1.6rem;
+    width: 65px;
+    height: 65px;
+    font-size: 1.4rem;
 }
 
-/* Landscape mobile controls */
-@media (max-height: 450px) and (orientation: landscape) {
+/* Portrait mode - buttons at bottom */
+@media (orientation: portrait) {
     .mobile-controls {
-        padding: 12px;
-        padding-bottom: max(12px, env(safe-area-inset-bottom));
+        padding: 20px;
+        padding-bottom: max(25px, env(safe-area-inset-bottom));
     }
     
     .mobile-jump {
-        width: 65px;
-        height: 65px;
-        font-size: 0.7rem;
+        width: 90px;
+        height: 90px;
+        font-size: 0.8rem;
     }
     
     .mobile-left, .mobile-right {
-        width: 55px;
-        height: 55px;
-        font-size: 1.3rem;
+        width: 70px;
+        height: 70px;
+        font-size: 1.5rem;
+    }
+    
+    .mobile-movement {
+        gap: 15px;
+    }
+}
+
+/* Landscape mobile controls - more compact */
+@media (max-height: 500px) and (orientation: landscape) {
+    .mobile-controls {
+        padding: 10px 20px;
+        padding-bottom: max(10px, env(safe-area-inset-bottom));
+        padding-left: max(20px, env(safe-area-inset-left));
+        padding-right: max(20px, env(safe-area-inset-right));
+    }
+    
+    .mobile-jump {
+        width: 60px;
+        height: 60px;
+        font-size: 0.65rem;
+    }
+    
+    .mobile-left, .mobile-right {
+        width: 50px;
+        height: 50px;
+        font-size: 1.2rem;
     }
     
     .mobile-movement {
